@@ -1,6 +1,16 @@
 {
   "station": "HOB",
-  "poll_seconds": 45,
+  "poll_baseline_seconds": 30,
+  "poll_aggressive_seconds": 15,
+  "poll_relaxed_seconds": 90,
+  "poll_background_seconds": 300,
+  "aggressive_threshold_seconds": 300,
+  "relaxed_threshold_seconds": 900,
+  "jitter_ratio": 0.1,
+  "ttl_seconds": 45,
+  "ttl_aggressive_seconds": 20,
+  "stale_no_change_polls": 3,
+  "stale_failure_polls": 3,
   "stale_after_seconds": 120,
   "max_cards": 5,
   "font_family": "Inter, Segoe UI, Arial"

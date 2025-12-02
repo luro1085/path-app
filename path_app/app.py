@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import List, Optional
+import random
 
 import requests
 from PyQt6 import QtCore, QtGui, QtWidgets
@@ -61,8 +62,8 @@ class FetchThread(QtCore.QThread):
             try:
                 station_data = self._fetch_once()
                 self.data_received.emit(station_data)
-                self._backoff_seconds = self.config.poll_seconds
-                delay = self.config.poll_seconds
+                self._backoff_seconds = self.config.poll_baseline_seconds
+                delay = self._next_delay(station_data)
             except Exception as exc:  # pragma: no cover - network issues
                 logging.warning("Fetch failed: %s", exc)
                 self.fetch_failed.emit(str(exc))
@@ -79,6 +80,21 @@ class FetchThread(QtCore.QThread):
         resp = self.session.get(FEED_URL, timeout=5)
         resp.raise_for_status()
         return parse_station_data(resp.json(), self.config.station)
+
+    def _next_delay(self, data: StationData) -> float:
+        """Adaptive polling interval with jitter."""
+        if not data.messages:
+            base = self.config.poll_background_seconds
+        else:
+            soonest = min(msg.seconds_to_arrival for msg in data.messages)
+            if soonest < self.config.aggressive_threshold_seconds:
+                base = self.config.poll_aggressive_seconds
+            elif soonest > self.config.relaxed_threshold_seconds:
+                base = self.config.poll_relaxed_seconds
+            else:
+                base = self.config.poll_baseline_seconds
+        jitter = 1 + random.uniform(-self.config.jitter_ratio, self.config.jitter_ratio)
+        return max(5, base * jitter)
 
 
 class ColorStrip(QtWidgets.QWidget):
@@ -227,6 +243,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.config = config
         self.latest_data: Optional[StationData] = None
         self.last_fetch_ok = False
+        self.last_successful_fetch: Optional[datetime] = None
+        self.last_signature: Optional[tuple] = None
+        self.unchanged_polls: int = 0
+        self.consecutive_failures: int = 0
 
         self.setWindowTitle("PATH Arrivals - Hoboken")
         self.setWindowFlag(QtCore.Qt.WindowType.FramelessWindowHint, True)
@@ -347,12 +367,22 @@ class MainWindow(QtWidgets.QMainWindow):
     def on_data_received(self, data: StationData) -> None:
         self.latest_data = data
         self.last_fetch_ok = True
+        self.consecutive_failures = 0
+
+        signature = self._build_signature(data)
+        if signature == self.last_signature:
+            self.unchanged_polls += 1
+        else:
+            self.unchanged_polls = 0
+            self.last_signature = signature
+        self.last_successful_fetch = datetime.now(timezone.utc)
         self.refresh_cards()
         self.update_status_pill()
 
     def on_fetch_failed(self, error_message: str) -> None:
         logging.warning("Fetch failed: %s", error_message)
         self.last_fetch_ok = False
+        self.consecutive_failures += 1
         self.update_status_pill()
 
     def refresh_cards(self) -> None:
@@ -390,17 +420,26 @@ class MainWindow(QtWidgets.QMainWindow):
         last_update = data.last_updated if data else None
         now = datetime.now(timezone.utc)
         stale_due_age = True
+        ttl_seconds = self.config.ttl_seconds
+        if data and data.messages:
+            soonest = min(msg.seconds_to_arrival for msg in data.messages)
+            if soonest < self.config.aggressive_threshold_seconds:
+                ttl_seconds = self.config.ttl_aggressive_seconds
+            else:
+                ttl_seconds = max(ttl_seconds, int(self.config.poll_baseline_seconds * 1.5))
+        if self.last_successful_fetch:
+            age = (now - self.last_successful_fetch).total_seconds()
+            stale_due_age = age > ttl_seconds
         if last_update:
-            last_update_utc = last_update.astimezone(timezone.utc)
-            age = (now - last_update_utc).total_seconds()
-            stale_due_age = age > self.config.stale_after_seconds
-            display_time = last_update_utc.astimezone().strftime("%H:%M:%S")
+            display_time = last_update.astimezone().strftime("%H:%M:%S")
             self.last_updated_label.setText(f"Last updated: {display_time}")
         else:
             self.last_updated_label.setText("Last updated: --:--:--")
 
         has_messages = bool(data and data.messages)
-        is_stale = (not self.last_fetch_ok) or stale_due_age or (not has_messages)
+        stale_no_change = self.unchanged_polls >= self.config.stale_no_change_polls
+        stale_failures = self.consecutive_failures >= self.config.stale_failure_polls
+        is_stale = (not self.last_fetch_ok) or stale_due_age or (not has_messages) or stale_no_change or stale_failures
         self.status_pill.set_live(not is_stale)
 
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
@@ -447,6 +486,14 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.logo_label.setPixmap(scaled)
         self.logo_label.setFixedSize(target_width, target_height)
+
+    def _build_signature(self, data: StationData | None) -> tuple:
+        if not data or not data.messages:
+            return ()
+        return tuple(
+            (m.headsign, m.target, m.seconds_to_arrival, m.arrival_message, tuple(m.line_colors))
+            for m in data.messages
+        )
 
 
 def main() -> int:

@@ -14,8 +14,19 @@ Windows-first PyQt6 display for live PATH arrivals from `ridepath.json`. Sized e
 
 ## Config (`config.json`)
 - `station`: station code (default `HOB`).
-- `poll_seconds`: poll interval after a good fetch (default 45).
-- `stale_after_seconds`: age threshold for marking STALE (default 120).
+- Adaptive polling (with jitter ±10%):
+  - `poll_baseline_seconds` (default 30)
+  - `poll_aggressive_seconds` (<5 min soonest ETA, default 15)
+  - `poll_relaxed_seconds` (>15 min soonest ETA, default 90)
+  - `poll_background_seconds` (no messages, default 300)
+  - `aggressive_threshold_seconds` (default 300)
+  - `relaxed_threshold_seconds` (default 900)
+  - `jitter_ratio` (default 0.1)
+- Staleness:
+  - `ttl_seconds` (default 45), `ttl_aggressive_seconds` (default 20)
+  - `stale_no_change_polls` (unchanged payload polls to mark stale, default 3)
+  - `stale_failure_polls` (failed polls to mark stale, default 3)
+  - `stale_after_seconds` legacy fallback (default 120)
 - `max_cards`: maximum cards shown on the left strip.
 - `font_family`: preferred fonts, comma-separated.
 
@@ -33,4 +44,3 @@ Windows-first PyQt6 display for live PATH arrivals from `ridepath.json`. Sized e
 ## Optional: Single EXE
 - Install PyInstaller (`pip install pyinstaller`).
 - Build: `pyinstaller path_app.spec` (bundles defaults and runs windowed/no-console).
-

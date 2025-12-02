@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import re
 from typing import Any, List, Optional
+
+
+ARRIVAL_LEAD_SECONDS = 60
+MIN_SECONDS_TO_SHOW = 90
 
 
 @dataclass
@@ -53,6 +58,15 @@ def parse_last_updated(value: str | None) -> Optional[datetime]:
     return dt
 
 
+def _format_arrival_message(arrival_message: str, seconds_to_arrival: int) -> str:
+    if not arrival_message:
+        return ""
+    if re.fullmatch(r"\s*(\d+)\s*min\s*", arrival_message, flags=re.IGNORECASE):
+        minutes = max(0, seconds_to_arrival // 60)
+        return f"{minutes} min"
+    return arrival_message
+
+
 def parse_station_data(payload: Any, station_code: str) -> StationData:
     results = payload.get("results") if isinstance(payload, dict) else None
     if not isinstance(results, list):
@@ -70,14 +84,19 @@ def parse_station_data(payload: Any, station_code: str) -> StationData:
         label = destination.get("label", "")
         for raw_msg in destination.get("messages", []):
             try:
-                seconds = int(raw_msg.get("secondsToArrival", "0"))
+                raw_seconds = int(raw_msg.get("secondsToArrival", "0"))
             except (TypeError, ValueError):
                 continue
+            if raw_seconds < MIN_SECONDS_TO_SHOW:
+                continue
+            seconds = max(0, raw_seconds - ARRIVAL_LEAD_SECONDS)
+            arrival_message = str(raw_msg.get("arrivalTimeMessage", "")).strip()
+            arrival_message = _format_arrival_message(arrival_message, seconds)
             message = TrainMessage(
                 label=label,
                 target=str(raw_msg.get("target", "")).strip(),
                 seconds_to_arrival=seconds,
-                arrival_message=str(raw_msg.get("arrivalTimeMessage", "")).strip(),
+                arrival_message=arrival_message,
                 line_colors=parse_line_colors(str(raw_msg.get("lineColor", ""))),
                 headsign=str(raw_msg.get("headSign", "")).strip(),
                 last_updated=parse_last_updated(raw_msg.get("lastUpdated")),
@@ -103,4 +122,3 @@ __all__ = [
     "parse_last_updated",
     "top_messages",
 ]
-
