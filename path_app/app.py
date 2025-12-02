@@ -1,0 +1,480 @@
+from __future__ import annotations
+
+import logging
+import sys
+import threading
+from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+from typing import List, Optional
+
+import requests
+from PyQt6 import QtCore, QtGui, QtWidgets
+
+from .config import AppConfig, load_config
+from .path_data import StationData, TrainMessage, parse_station_data, top_messages
+
+LOG_PATH = Path("logs/app.log")
+FEED_URL = "https://www.panynj.gov/bin/portauthority/ridepath.json"
+LOGO_PATH = Path("PATH_logo.png")
+LOGO_ASPECT = 2560 / 1318
+
+
+def setup_logging() -> None:
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(LOG_PATH, maxBytes=512_000, backupCount=3)
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    handler.setFormatter(formatter)
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
+
+
+def ensure_dpi_awareness() -> None:
+    """Opt into per-monitor DPI awareness on Windows for crisp text."""
+    try:
+        import ctypes
+
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        pass
+
+
+class FetchThread(QtCore.QThread):
+    data_received = QtCore.pyqtSignal(object)
+    fetch_failed = QtCore.pyqtSignal(str)
+
+    def __init__(self, config: AppConfig) -> None:
+        super().__init__()
+        self.config = config
+        self.session = requests.Session()
+        self._stop_event = threading.Event()
+        self._backoff_seconds = 5
+
+    def run(self) -> None:
+        delay = 0
+        while not self._stop_event.is_set():
+            if delay:
+                if self._stop_event.wait(delay):
+                    break
+            try:
+                station_data = self._fetch_once()
+                self.data_received.emit(station_data)
+                self._backoff_seconds = self.config.poll_seconds
+                delay = self.config.poll_seconds
+            except Exception as exc:  # pragma: no cover - network issues
+                logging.warning("Fetch failed: %s", exc)
+                self.fetch_failed.emit(str(exc))
+                if self._backoff_seconds < 5:
+                    self._backoff_seconds = 5
+                delay = min(60, self._backoff_seconds)
+                self._backoff_seconds = min(60, self._backoff_seconds * 2)
+        self.session.close()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+
+    def _fetch_once(self) -> StationData:
+        resp = self.session.get(FEED_URL, timeout=5)
+        resp.raise_for_status()
+        return parse_station_data(resp.json(), self.config.station)
+
+
+class ColorStrip(QtWidgets.QWidget):
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setFixedHeight(8)
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed
+        )
+
+    def set_colors(self, colors: List[str]) -> None:
+        if not colors:
+            colors = ["#999999"]
+        if len(colors) == 1:
+            style = f"background-color: {colors[0]};"
+        else:
+            c1, c2 = colors[0], colors[1]
+            style = (
+                "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+                f"stop:0 {c1}, stop:0.5 {c1}, stop:0.5 {c2}, stop:1 {c2});"
+            )
+        self.setStyleSheet(style)
+
+
+class CardWidget(QtWidgets.QFrame):
+    def __init__(self, font_family: str, parent: Optional[QtWidgets.QWidget] = None):
+        super().__init__(parent)
+        self.setObjectName("card")
+        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.setStyleSheet(
+            """
+            QFrame#card {
+                background-color: #0D141F;
+                border-radius: 10px;
+                color: #F5F7FA;
+            }
+            """
+        )
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(6)
+
+        self.strip = ColorStrip(self)
+        layout.addWidget(self.strip)
+
+        body = QtWidgets.QVBoxLayout()
+        body.setContentsMargins(4, 6, 4, 6)
+        body.setSpacing(6)
+        self.headsign_label = QtWidgets.QLabel()
+        self.headsign_label.setWordWrap(True)
+        head_font = QtGui.QFont()
+        head_font.setFamilies([f.strip() for f in font_family.split(",")])
+        head_font.setPointSize(30)
+        head_font.setBold(True)
+        self.headsign_label.setFont(head_font)
+        self.headsign_label.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        self.headsign_label.setStyleSheet("color: #E7ECF3;")
+
+        self.arrival_label = QtWidgets.QLabel()
+        self.arrival_label.setWordWrap(False)
+        arr_font = QtGui.QFont()
+        arr_font.setFamilies([f.strip() for f in font_family.split(",")])
+        arr_font.setPointSize(52)
+        arr_font.setBold(True)
+        self.arrival_label.setFont(arr_font)
+        self.arrival_label.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        self.arrival_label.setMinimumWidth(0)
+        self.arrival_label.setStyleSheet("color: #F2C94C;")
+
+        body.addWidget(self.headsign_label, stretch=1)
+        body.addWidget(self.arrival_label, stretch=1)
+        layout.addLayout(body)
+
+        # Direction/label row was requested to be hidden (only show headsign + time)
+        self.direction_label = QtWidgets.QLabel()
+        self.direction_label.setVisible(False)
+        layout.addWidget(self.direction_label)
+
+    def update_from(self, message: TrainMessage) -> None:
+        self.strip.set_colors(message.line_colors)
+        head = message.headsign or message.target
+        primary_color = message.line_colors[0] if message.line_colors else "#E7ECF3"
+        self.headsign_label.setStyleSheet(f"color: {primary_color};")
+        self.headsign_label.setText(head.upper())
+
+        # Arrival time keeps a consistent accent color
+        self.arrival_label.setStyleSheet("color: #F2C94C;")
+        self.arrival_label.setText(message.arrival_message or f"{message.seconds_to_arrival // 60} min")
+        self.direction_label.setText("")
+
+
+class StatusPill(QtWidgets.QLabel):
+    def __init__(self, font_family: str, parent: Optional[QtWidgets.QWidget] = None):
+        super().__init__(parent)
+        font = QtGui.QFont()
+        font.setFamilies([f.strip() for f in font_family.split(",")])
+        font.setPointSize(16)
+        font.setBold(True)
+        self.setFont(font)
+        self.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.setFixedWidth(120)
+        self.setFixedHeight(36)
+        self.setObjectName("pill")
+        self.setStyleSheet(
+            """
+            QLabel#pill {
+                border-radius: 18px;
+                color: #0D141F;
+                background-color: #56CC9D;
+            }
+            """
+        )
+
+    def set_live(self, live: bool) -> None:
+        if live:
+            self.setText("LIVE")
+            self.setStyleSheet(
+                """
+                QLabel#pill {
+                    border-radius: 18px;
+                    color: #0D141F;
+                    background-color: #56CC9D;
+                }
+                """
+            )
+        else:
+            self.setText("STALE")
+            self.setStyleSheet(
+                """
+                QLabel#pill {
+                    border-radius: 18px;
+                    color: #0D141F;
+                    background-color: #E0A800;
+                }
+                """
+            )
+
+
+class MainWindow(QtWidgets.QMainWindow):
+    def __init__(self, config: AppConfig):
+        super().__init__()
+        self.config = config
+        self.latest_data: Optional[StationData] = None
+        self.last_fetch_ok = False
+
+        self.setWindowTitle("PATH Arrivals - Hoboken")
+        self.setWindowFlag(QtCore.Qt.WindowType.FramelessWindowHint, True)
+        self.setWindowFlag(QtCore.Qt.WindowType.WindowStaysOnTopHint, True)
+        self.setFixedSize(1920, 720)
+        self.setStyleSheet("background-color: #0A111A;")
+        self.move(0, 0)
+
+        self._build_ui()
+        self._start_timers()
+
+        self.fetch_thread = FetchThread(self.config)
+        self.fetch_thread.data_received.connect(self.on_data_received)
+        self.fetch_thread.fetch_failed.connect(self.on_fetch_failed)
+        self.fetch_thread.start()
+
+    def _build_ui(self) -> None:
+        central = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(central)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(18)
+
+        # Left area
+        self.cards_container = QtWidgets.QWidget()
+        self.cards_layout = QtWidgets.QHBoxLayout(self.cards_container)
+        self.cards_layout.setContentsMargins(0, 0, 0, 0)
+        self.cards_layout.setSpacing(12)
+        layout.addWidget(self.cards_container, stretch=5)
+
+        self.card_widgets: List[CardWidget] = []
+        self.placeholder = QtWidgets.QLabel("No upcoming trains posted")
+        placeholder_font = QtGui.QFont()
+        placeholder_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
+        placeholder_font.setPointSize(26)
+        self.placeholder.setFont(placeholder_font)
+        self.placeholder.setStyleSheet("color: #7B8A9A;")
+        self.placeholder.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.cards_layout.addWidget(self.placeholder)
+
+        # Right area
+        sidebar = QtWidgets.QFrame()
+        self.sidebar = sidebar
+        sidebar.setMinimumWidth(320)
+        sidebar.setStyleSheet(
+            "background-color: #0F1825; border-radius: 12px; color: #E7ECF3;"
+        )
+        side_layout = QtWidgets.QVBoxLayout(sidebar)
+        side_layout.setContentsMargins(18, 18, 18, 18)
+        side_layout.setSpacing(10)
+
+        self.clock_label = QtWidgets.QLabel("--:--")
+        clock_font = QtGui.QFont()
+        clock_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
+        clock_font.setPointSize(46)
+        clock_font.setBold(True)
+        self.clock_label.setFont(clock_font)
+        self.clock_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
+        side_layout.addWidget(self.clock_label)
+
+        self.day_label = QtWidgets.QLabel("")
+        day_font = QtGui.QFont()
+        day_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
+        day_font.setPointSize(18)
+        self.day_label.setFont(day_font)
+        self.day_label.setStyleSheet("color: #9FB3C8;")
+        side_layout.addWidget(self.day_label)
+
+        side_layout.addSpacing(12)
+
+        self.last_updated_label = QtWidgets.QLabel("Last updated: --:--:--")
+        last_font = QtGui.QFont()
+        last_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
+        last_font.setPointSize(16)
+        self.last_updated_label.setFont(last_font)
+        self.last_updated_label.setStyleSheet("color: #C9D7E3;")
+        side_layout.addWidget(self.last_updated_label)
+
+        self.status_pill = StatusPill(self.config.font_family)
+        side_layout.addWidget(self.status_pill)
+        side_layout.addStretch()
+
+        # PATH logo beneath status panel
+        self.logo_label = QtWidgets.QLabel()
+        self.logo_label.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        self.logo_label.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+        self.logo_pixmap = QtGui.QPixmap(str(LOGO_PATH)) if LOGO_PATH.exists() else QtGui.QPixmap()
+        if self.logo_pixmap.isNull():
+            logo_font = QtGui.QFont()
+            logo_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
+            logo_font.setPointSize(20)
+            logo_font.setBold(True)
+            self.logo_label.setFont(logo_font)
+            self.logo_label.setStyleSheet("color: #E7ECF3;")
+            self.logo_label.setText("PATH")
+        side_layout.addWidget(self.logo_label)
+        QtCore.QTimer.singleShot(0, self.update_logo_size)
+        layout.addWidget(sidebar, stretch=1)
+
+        self.setCentralWidget(central)
+
+    def _start_timers(self) -> None:
+        self.clock_timer = QtCore.QTimer(self)
+        self.clock_timer.setInterval(1000)
+        self.clock_timer.timeout.connect(self.update_clock)
+        self.clock_timer.start()
+
+    def update_clock(self) -> None:
+        now = datetime.now()
+        self.clock_label.setText(now.strftime("%H:%M"))
+        self.day_label.setText(now.strftime("%A"))
+        self.update_status_pill()
+
+    def on_data_received(self, data: StationData) -> None:
+        self.latest_data = data
+        self.last_fetch_ok = True
+        self.refresh_cards()
+        self.update_status_pill()
+
+    def on_fetch_failed(self, error_message: str) -> None:
+        logging.warning("Fetch failed: %s", error_message)
+        self.last_fetch_ok = False
+        self.update_status_pill()
+
+    def refresh_cards(self) -> None:
+        messages = top_messages(self.latest_data.messages if self.latest_data else [], self.config.max_cards)
+        if not messages:
+            for widget in self.card_widgets:
+                widget.hide()
+            self.placeholder.show()
+            return
+
+        self.placeholder.hide()
+        # Update existing widgets or add/remove to match message count
+        while len(self.card_widgets) < len(messages):
+            card = CardWidget(self.config.font_family, self.cards_container)
+            card.setMinimumWidth(320)
+            card.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Expanding,
+                QtWidgets.QSizePolicy.Policy.Preferred,
+            )
+            self.cards_layout.addWidget(card)
+            self.card_widgets.append(card)
+
+        while len(self.card_widgets) > len(messages):
+            widget = self.card_widgets.pop()
+            self.cards_layout.removeWidget(widget)
+            widget.setParent(None)
+            widget.deleteLater()
+
+        for card, message in zip(self.card_widgets, messages):
+            card.update_from(message)
+            card.show()
+
+    def update_status_pill(self) -> None:
+        data = self.latest_data
+        last_update = data.last_updated if data else None
+        now = datetime.now(timezone.utc)
+        stale_due_age = True
+        if last_update:
+            last_update_utc = last_update.astimezone(timezone.utc)
+            age = (now - last_update_utc).total_seconds()
+            stale_due_age = age > self.config.stale_after_seconds
+            display_time = last_update_utc.astimezone().strftime("%H:%M:%S")
+            self.last_updated_label.setText(f"Last updated: {display_time}")
+        else:
+            self.last_updated_label.setText("Last updated: --:--:--")
+
+        has_messages = bool(data and data.messages)
+        is_stale = (not self.last_fetch_ok) or stale_due_age or (not has_messages)
+        self.status_pill.set_live(not is_stale)
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        if event.key() == QtCore.Qt.Key.Key_Q and event.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier:
+            self.close()
+        else:
+            super().keyPressEvent(event)
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        if hasattr(self, "fetch_thread"):
+            self.fetch_thread.stop()
+            self.fetch_thread.wait(2000)
+        super().closeEvent(event)
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        self.update_logo_size()
+        super().resizeEvent(event)
+
+    def update_logo_size(self) -> None:
+        if not hasattr(self, "logo_label") or self.logo_label is None:
+            return
+        if not hasattr(self, "logo_pixmap") or self.logo_pixmap.isNull():
+            return
+
+        sidebar_width = self.sidebar.width() if hasattr(self, "sidebar") else 300
+        sidebar_height = self.sidebar.height() if hasattr(self, "sidebar") else 400
+
+        margin_allowance = 36
+        max_width = max(120, sidebar_width - margin_allowance)
+        # leave space for clock/day/status; use roughly the lower half for the logo
+        max_height = max(120, int(sidebar_height * 0.5))
+
+        target_width = min(max_width, int(max_height * LOGO_ASPECT))
+        target_height = int(target_width / LOGO_ASPECT)
+        if target_height > max_height:
+            target_height = max_height
+            target_width = int(target_height * LOGO_ASPECT)
+
+        scaled = self.logo_pixmap.scaled(
+            target_width,
+            target_height,
+            QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+            QtCore.Qt.TransformationMode.SmoothTransformation,
+        )
+        self.logo_label.setPixmap(scaled)
+        self.logo_label.setFixedSize(target_width, target_height)
+
+
+def main() -> int:
+    setup_logging()
+    config = load_config()
+
+    for attr_name in ("AA_EnableHighDpiScaling", "AA_UseHighDpiPixmaps"):
+        attr = getattr(QtCore.Qt.ApplicationAttribute, attr_name, None)
+        if attr is not None:
+            QtWidgets.QApplication.setAttribute(attr, True)
+    # Prefer crisp scaling on HiDPI displays if available.
+    rounding_policy = getattr(
+        QtCore.Qt.HighDpiScaleFactorRoundingPolicy, "PassThrough", None
+    )
+    if rounding_policy is not None:
+        QtWidgets.QApplication.setHighDpiScaleFactorRoundingPolicy(rounding_policy)
+
+    app = QtWidgets.QApplication(sys.argv)
+    font = QtGui.QFont()
+    font.setFamilies([f.strip() for f in config.font_family.split(",")])
+    font.setPointSize(12)
+    app.setFont(font)
+    app.setStyle("Fusion")
+
+    window = MainWindow(config)
+    window.show()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

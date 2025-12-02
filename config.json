@@ -1,0 +1,7 @@
+{
+  "station": "HOB",
+  "poll_seconds": 45,
+  "stale_after_seconds": 120,
+  "max_cards": 5,
+  "font_family": "Inter, Segoe UI, Arial"
+}
