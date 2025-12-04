@@ -188,17 +188,25 @@ class CardWidget(QtWidgets.QFrame):
         self.setStyleSheet(
             """
             QFrame#card {
-                background-color: transparent;
-                border-radius: 0px;
+                background-color: rgba(18, 25, 38, 0.92);
+                border-radius: 18px;
                 color: #F5F7FA;
-                border: none;
+                border: 1px solid #1C2A3A;
+            }
+            QLabel#pillLabel {
+                background-color: rgba(255, 255, 255, 0.08);
+                color: #9FB3C8;
+                padding: 4px 10px;
+                border-radius: 12px;
+                font-weight: 700;
+                letter-spacing: 0.8px;
             }
             """
         )
-        self.setMinimumHeight(110)
-        layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.setSpacing(10)
+        self.setMinimumHeight(120)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
 
         self.fade_effect = QtWidgets.QGraphicsOpacityEffect(self)
         self.setGraphicsEffect(self.fade_effect)
@@ -209,30 +217,66 @@ class CardWidget(QtWidgets.QFrame):
         self.fade_anim.setEndValue(1.0)
 
         self.strip = ColorStrip(
-            self, orientation=QtCore.Qt.Orientation.Vertical
+            self, orientation=QtCore.Qt.Orientation.Horizontal
         )
         layout.addWidget(self.strip)
 
         body = QtWidgets.QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(10)
+        body.setSpacing(12)
+
+        left_col = QtWidgets.QVBoxLayout()
+        left_col.setSpacing(6)
+        badge_row = QtWidgets.QHBoxLayout()
+        badge_row.setSpacing(8)
+
+        self.line_badge = QtWidgets.QLabel()
+        badge_font = QtGui.QFont()
+        badge_font.setFamilies([f.strip() for f in font_family.split(",")])
+        badge_font.setPointSize(14)
+        badge_font.setBold(True)
+        self.line_badge.setFont(badge_font)
+        self.line_badge.setObjectName("pillLabel")
+        self.line_badge.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignCenter | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        badge_row.addWidget(self.line_badge, 0, QtCore.Qt.AlignmentFlag.AlignLeft)
+        badge_row.addStretch(1)
+        left_col.addLayout(badge_row)
+
         self.headsign_label = QtWidgets.QLabel()
         self.headsign_label.setWordWrap(True)
         head_font = QtGui.QFont()
         head_font.setFamilies([f.strip() for f in font_family.split(",")])
-        head_font.setPointSize(30)
+        head_font.setPointSize(32)
         head_font.setBold(True)
         self.headsign_label.setFont(head_font)
         self.headsign_label.setAlignment(
             QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
         )
         self.headsign_label.setStyleSheet("color: #E7ECF3;")
+        left_col.addWidget(self.headsign_label)
 
+        self.meta_label = QtWidgets.QLabel()
+        meta_font = QtGui.QFont()
+        meta_font.setFamilies([f.strip() for f in font_family.split(",")])
+        meta_font.setPointSize(16)
+        self.meta_label.setFont(meta_font)
+        self.meta_label.setStyleSheet("color: #9FB3C8;")
+        self.meta_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
+        self.meta_label.setWordWrap(True)
+        left_col.addWidget(self.meta_label)
+
+        body.addLayout(left_col, stretch=3)
+
+        right_col = QtWidgets.QVBoxLayout()
+        right_col.setSpacing(4)
+        right_col.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
         self.arrival_label = QtWidgets.QLabel()
         self.arrival_label.setWordWrap(False)
         arr_font = QtGui.QFont()
         arr_font.setFamilies([f.strip() for f in font_family.split(",")])
-        arr_font.setPointSize(48)
+        arr_font.setPointSize(54)
         arr_font.setBold(True)
         self.arrival_label.setFont(arr_font)
         self.arrival_label.setAlignment(
@@ -241,26 +285,42 @@ class CardWidget(QtWidgets.QFrame):
         )
         self.arrival_label.setMinimumWidth(0)
         self.arrival_label.setStyleSheet("color: #F2C94C;")
+        right_col.addWidget(self.arrival_label, 0, QtCore.Qt.AlignmentFlag.AlignRight)
 
-        body.addWidget(self.headsign_label, stretch=3)
-        body.addWidget(self.arrival_label, stretch=1)
+        self.subtle_label = QtWidgets.QLabel()
+        subtle_font = QtGui.QFont()
+        subtle_font.setFamilies([f.strip() for f in font_family.split(",")])
+        subtle_font.setPointSize(14)
+        self.subtle_label.setFont(subtle_font)
+        self.subtle_label.setStyleSheet("color: #9FB3C8;")
+        self.subtle_label.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignRight
+            | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        right_col.addWidget(self.subtle_label, 0, QtCore.Qt.AlignmentFlag.AlignRight)
+
+        body.addLayout(right_col, stretch=1)
         layout.addLayout(body, stretch=1)
 
-        # Direction/label row was requested to be hidden (only show headsign + time)
         self.direction_label = QtWidgets.QLabel()
         self.direction_label.setVisible(False)
         layout.addWidget(self.direction_label)
 
     def update_from(self, message: TrainMessage) -> None:
         self.strip.set_colors(message.line_colors)
-        head = message.headsign or message.target
+        head = message.headsign or message.target or "PATH"
         primary_color = message.line_colors[0] if message.line_colors else "#E7ECF3"
         self.headsign_label.setStyleSheet(f"color: {primary_color};")
         self.headsign_label.setText(head.upper())
 
-        # Arrival time keeps a consistent accent color
-        self.arrival_label.setStyleSheet("color: #F2C94C;")
-        self.arrival_label.setText(message.arrival_message or f"{message.seconds_to_arrival // 60} min")
+        line_name = message.label.strip() if message.label else "PATH"
+        self.line_badge.setText(line_name.upper())
+        meta_parts = [part for part in [message.target, message.headsign] if part]
+        self.meta_label.setText(" • ".join(meta_parts) if meta_parts else "On time service")
+
+        arrival_text = message.arrival_message or f"{message.seconds_to_arrival // 60} min"
+        self.arrival_label.setText(arrival_text)
+        self.subtle_label.setText("Updated feed")
         self.direction_label.setText("")
         self._run_fade()
         QtCore.QTimer.singleShot(0, self.adjust_font_sizes)
@@ -270,8 +330,11 @@ class CardWidget(QtWidgets.QFrame):
         self.adjust_font_sizes()
 
     def adjust_font_sizes(self) -> None:
-        fit_label(self.headsign_label, max_point_size=60, min_point_size=20, padding=4, wrap=True)
-        fit_label(self.arrival_label, max_point_size=96, min_point_size=32, padding=4, wrap=False)
+        fit_label(self.line_badge, max_point_size=18, min_point_size=10, padding=2)
+        fit_label(self.headsign_label, max_point_size=58, min_point_size=18, padding=4, wrap=True)
+        fit_label(self.meta_label, max_point_size=22, min_point_size=12, padding=4, wrap=True)
+        fit_label(self.arrival_label, max_point_size=96, min_point_size=36, padding=4, wrap=False)
+        fit_label(self.subtle_label, max_point_size=18, min_point_size=10, padding=2, wrap=False)
 
     def _run_fade(self) -> None:
         if self.fade_anim.state() == QtCore.QAbstractAnimation.State.Running:
@@ -348,7 +411,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowFlag(QtCore.Qt.WindowType.FramelessWindowHint, True)
         self.setWindowFlag(QtCore.Qt.WindowType.WindowStaysOnTopHint, True)
         self.setFixedSize(1920, 720)
-        self.setStyleSheet("background-color: #0A111A;")
+        self.setStyleSheet("background-color: #070C14;")
         self.move(0, 0)
 
         self._build_ui()
@@ -361,43 +424,185 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _build_ui(self) -> None:
         central = QtWidgets.QWidget()
-        layout = QtWidgets.QHBoxLayout(central)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(18)
+        central.setObjectName("surface")
+        central.setStyleSheet(
+            """
+            QWidget#surface {
+                background: qradialgradient(cx:0.1, cy:0.1, radius: 1.4, fx:0.3, fy:0.3,
+                    stop:0 #122032, stop:0.35 #0B1523, stop:1 #070C14);
+            }
+            """
+        )
+        main_layout = QtWidgets.QVBoxLayout(central)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(16)
 
-        # Left area
+        header = QtWidgets.QFrame()
+        header.setObjectName("header")
+        header.setStyleSheet(
+            """
+            QFrame#header {
+                background-color: rgba(255, 255, 255, 0.02);
+                border: 1px solid #1B2738;
+                border-radius: 18px;
+            }
+            """
+        )
+        header_layout = QtWidgets.QHBoxLayout(header)
+        header_layout.setContentsMargins(20, 16, 20, 16)
+        header_layout.setSpacing(18)
+
+        title_stack = QtWidgets.QVBoxLayout()
+        title_stack.setSpacing(8)
+        self.title_label = QtWidgets.QLabel("PATH ARRIVALS")
+        title_font = QtGui.QFont()
+        title_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
+        title_font.setPointSize(26)
+        title_font.setBold(True)
+        self.title_label.setFont(title_font)
+        self.title_label.setStyleSheet("color: #E7ECF3; letter-spacing: 1.4px;")
+        title_stack.addWidget(self.title_label)
+
+        chip_row = QtWidgets.QHBoxLayout()
+        chip_row.setSpacing(10)
+        self.station_chip = QtWidgets.QLabel(f"Station {self.config.station}")
+        chip_font = QtGui.QFont()
+        chip_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
+        chip_font.setPointSize(14)
+        chip_font.setBold(True)
+        self.station_chip.setFont(chip_font)
+        self.station_chip.setStyleSheet(
+            "color: #B7C7D9; background-color: rgba(255,255,255,0.08);"
+            " padding: 6px 12px; border-radius: 14px;"
+        )
+        chip_row.addWidget(self.station_chip, 0, QtCore.Qt.AlignmentFlag.AlignLeft)
+        chip_row.addStretch(1)
+        title_stack.addLayout(chip_row)
+
+        subtitle = QtWidgets.QLabel("Live board with real-time train departures")
+        subtitle_font = QtGui.QFont()
+        subtitle_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
+        subtitle_font.setPointSize(14)
+        subtitle.setFont(subtitle_font)
+        subtitle.setStyleSheet("color: #8FA4BC;")
+        title_stack.addWidget(subtitle)
+        header_layout.addLayout(title_stack, stretch=3)
+
+        time_stack = QtWidgets.QVBoxLayout()
+        time_stack.setSpacing(6)
+        time_stack.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+
+        self.clock_label = QtWidgets.QLabel("--:--")
+        clock_font = QtGui.QFont()
+        clock_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
+        clock_font.setPointSize(54)
+        clock_font.setBold(True)
+        self.clock_label.setFont(clock_font)
+        self.clock_label.setStyleSheet("color: #F6F9FD;")
+        self.clock_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+        time_stack.addWidget(self.clock_label)
+
+        self.day_label = QtWidgets.QLabel("")
+        day_font = QtGui.QFont()
+        day_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
+        day_font.setPointSize(18)
+        self.day_label.setFont(day_font)
+        self.day_label.setStyleSheet("color: #9FB3C8;")
+        self.day_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+        time_stack.addWidget(self.day_label)
+
+        self.last_updated_label = QtWidgets.QLabel("Last updated: --:--:--")
+        last_font = QtGui.QFont()
+        last_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
+        last_font.setPointSize(16)
+        self.last_updated_label.setFont(last_font)
+        self.last_updated_label.setStyleSheet("color: #C9D7E3;")
+        self.last_updated_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+        time_stack.addWidget(self.last_updated_label)
+
+        self.status_pill = StatusPill(self.config.font_family)
+        time_stack.addWidget(
+            self.status_pill, alignment=QtCore.Qt.AlignmentFlag.AlignRight
+        )
+        header_layout.addLayout(time_stack, stretch=2)
+        main_layout.addWidget(header)
+
+        content_layout = QtWidgets.QHBoxLayout()
+        content_layout.setSpacing(18)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+
+        cards_panel = QtWidgets.QFrame()
+        cards_panel.setObjectName("cardsPanel")
+        cards_panel.setStyleSheet(
+            """
+            QFrame#cardsPanel {
+                background-color: rgba(10, 16, 26, 0.86);
+                border: 1px solid #162234;
+                border-radius: 18px;
+            }
+            """
+        )
+        cards_panel_layout = QtWidgets.QVBoxLayout(cards_panel)
+        cards_panel_layout.setContentsMargins(16, 16, 16, 16)
+        cards_panel_layout.setSpacing(12)
+
+        header_row = QtWidgets.QHBoxLayout()
+        header_row.setSpacing(8)
+        upcoming_label = QtWidgets.QLabel("Upcoming departures")
+        upcoming_font = QtGui.QFont()
+        upcoming_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
+        upcoming_font.setPointSize(18)
+        upcoming_font.setBold(True)
+        upcoming_label.setFont(upcoming_font)
+        upcoming_label.setStyleSheet("color: #E7ECF3;")
+        header_row.addWidget(upcoming_label)
+        header_row.addStretch(1)
+        cards_panel_layout.addLayout(header_row)
+
         self.cards_container = QtWidgets.QWidget()
         self.cards_layout = QtWidgets.QVBoxLayout(self.cards_container)
         self.cards_layout.setContentsMargins(0, 0, 0, 0)
         self.cards_layout.setSpacing(10)
         self.cards_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop)
-        layout.addWidget(self.cards_container, stretch=5)
+        cards_panel_layout.addWidget(self.cards_container)
 
         self.card_widgets: List[CardWidget] = []
         self.placeholder = QtWidgets.QLabel("No upcoming trains posted")
         placeholder_font = QtGui.QFont()
         placeholder_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
-        placeholder_font.setPointSize(26)
+        placeholder_font.setPointSize(24)
+        placeholder_font.setBold(True)
         self.placeholder.setFont(placeholder_font)
-        self.placeholder.setStyleSheet("color: #7B8A9A;")
+        self.placeholder.setStyleSheet(
+            "color: #6E7E95; background-color: rgba(255,255,255,0.03);"
+            " border: 1px dashed #2A3B53; border-radius: 14px; padding: 22px;"
+        )
         self.placeholder.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.cards_layout.addWidget(self.placeholder)
 
-        # Right area
+        content_layout.addWidget(cards_panel, stretch=3)
+
         sidebar = QtWidgets.QFrame()
         self.sidebar = sidebar
-        sidebar.setMinimumWidth(320)
+        sidebar.setMinimumWidth(360)
+        sidebar.setObjectName("sidebar")
         sidebar.setStyleSheet(
-            "background-color: #0F1825; border-radius: 12px; color: #E7ECF3;"
+            """
+            QFrame#sidebar {
+                background-color: rgba(13, 20, 31, 0.92);
+                border-radius: 18px;
+                border: 1px solid #162234;
+                color: #E7ECF3;
+            }
+            """
         )
         side_layout = QtWidgets.QVBoxLayout(sidebar)
-        side_layout.setContentsMargins(12, 8, 12, 4)
-        side_layout.setSpacing(2)
+        side_layout.setContentsMargins(16, 14, 16, 10)
+        side_layout.setSpacing(12)
         side_layout.setAlignment(
             QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignTop
         )
 
-        # Hoboken logo above status content
         self.hoboken_logo_label = QtWidgets.QLabel()
         self.hoboken_logo_label.setAlignment(
             QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignVCenter
@@ -419,80 +624,38 @@ class MainWindow(QtWidgets.QMainWindow):
             self.hoboken_logo_label.setFont(hoboken_font)
             self.hoboken_logo_label.setStyleSheet("color: #56CC9D;")
             self.hoboken_logo_label.setText("HOBOKEN")
+        side_layout.addWidget(self.hoboken_logo_label)
 
-        # Top block with logo and info, allowing slight overlap upward
-        top_block = QtWidgets.QWidget()
-        top_layout = QtWidgets.QVBoxLayout(top_block)
-        top_layout.setContentsMargins(0, 0, 0, 0)
-        top_layout.setSpacing(-50)
-        top_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
-        top_layout.addWidget(
-            self.hoboken_logo_label,
-            alignment=QtCore.Qt.AlignmentFlag.AlignCenter,
-        )
+        highlight = QtWidgets.QLabel("Service summary")
+        highlight_font = QtGui.QFont()
+        highlight_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
+        highlight_font.setPointSize(16)
+        highlight_font.setBold(True)
+        highlight.setFont(highlight_font)
+        highlight.setStyleSheet("color: #E7ECF3;")
+        side_layout.addWidget(highlight, 0, QtCore.Qt.AlignmentFlag.AlignLeft)
 
-        info_container = QtWidgets.QWidget()
-        info_container.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Expanding,
-        )
-        info_layout = QtWidgets.QVBoxLayout(info_container)
-        info_layout.setContentsMargins(0, -6, 0, 0)
-        info_layout.setSpacing(6)
-        info_layout.setAlignment(
-            QtCore.Qt.AlignmentFlag.AlignHCenter
-            | QtCore.Qt.AlignmentFlag.AlignVCenter
-        )
+        self.feed_status_value = QtWidgets.QLabel("Checking feed…")
+        self.feed_status_value.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
+        feed_font = QtGui.QFont()
+        feed_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
+        feed_font.setPointSize(22)
+        feed_font.setBold(True)
+        self.feed_status_value.setFont(feed_font)
+        self.feed_status_value.setStyleSheet("color: #56CC9D;")
+        side_layout.addWidget(self.feed_status_value)
 
-        self.clock_label = QtWidgets.QLabel("--:--")
-        clock_font = QtGui.QFont()
-        clock_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
-        clock_font.setPointSize(46)
-        clock_font.setBold(True)
-        self.clock_label.setFont(clock_font)
-        self.clock_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        info_layout.addWidget(self.clock_label)
+        self.trains_count_value = QtWidgets.QLabel("0 trains posted")
+        self.trains_count_value.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
+        count_font = QtGui.QFont()
+        count_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
+        count_font.setPointSize(18)
+        self.trains_count_value.setFont(count_font)
+        self.trains_count_value.setStyleSheet("color: #9FB3C8;")
+        side_layout.addWidget(self.trains_count_value)
 
-        self.day_label = QtWidgets.QLabel("")
-        day_font = QtGui.QFont()
-        day_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
-        day_font.setPointSize(18)
-        self.day_label.setFont(day_font)
-        self.day_label.setStyleSheet("color: #9FB3C8;")
-        self.day_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        info_layout.addWidget(self.day_label)
+        side_layout.addStretch(1)
 
-        self.last_updated_label = QtWidgets.QLabel("Last updated: --:--:--")
-        last_font = QtGui.QFont()
-        last_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
-        last_font.setPointSize(18)
-        self.last_updated_label.setFont(last_font)
-        self.last_updated_label.setStyleSheet("color: #C9D7E3;")
-        self.last_updated_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        info_layout.addWidget(self.last_updated_label)
-
-        self.status_pill = StatusPill(self.config.font_family)
-        info_layout.addWidget(
-            self.status_pill, alignment=QtCore.Qt.AlignmentFlag.AlignCenter
-        )
-
-        top_layout.addWidget(info_container, stretch=1)
-        top_block.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Maximum,
-        )
-        side_layout.addWidget(top_block)
-        # Push the PATH logo downward slightly with a fixed spacer
-        side_layout.addItem(
-            QtWidgets.QSpacerItem(
-                0,
-                40,
-                QtWidgets.QSizePolicy.Policy.Minimum,
-                QtWidgets.QSizePolicy.Policy.Fixed,
-            )
-        )
-
-        # PATH logo beneath status panel
         self.logo_label = QtWidgets.QLabel()
         self.logo_label.setAlignment(
             QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignVCenter
@@ -514,8 +677,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.logo_label, alignment=QtCore.Qt.AlignmentFlag.AlignCenter
         )
         QtCore.QTimer.singleShot(0, self.update_logo_size)
-        layout.addWidget(sidebar, stretch=1)
+        content_layout.addWidget(sidebar, stretch=1)
 
+        main_layout.addLayout(content_layout)
         self.setCentralWidget(central)
 
     def _start_timers(self) -> None:
@@ -559,9 +723,11 @@ class MainWindow(QtWidgets.QMainWindow):
             for widget in self.card_widgets:
                 widget.hide()
             self.placeholder.show()
+            self.trains_count_value.setText("0 trains posted")
             return
 
         self.placeholder.hide()
+        self.trains_count_value.setText(f"{len(messages)} trains posted")
         # Update existing widgets or add/remove to match message count
         while len(self.card_widgets) < len(messages):
             card = CardWidget(self.config.font_family, self.cards_container)
@@ -602,6 +768,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if last_update:
             display_time = last_update.astimezone().strftime("%H:%M:%S")
             self.last_updated_label.setText(f"Last updated: {display_time}")
+        elif self.last_successful_fetch:
+            display_time = self.last_successful_fetch.astimezone().strftime("%H:%M:%S")
+            self.last_updated_label.setText(f"Last fetched: {display_time}")
         else:
             self.last_updated_label.setText("Last updated: --:--:--")
 
@@ -610,6 +779,10 @@ class MainWindow(QtWidgets.QMainWindow):
         stale_failures = self.consecutive_failures >= self.config.stale_failure_polls
         is_stale = (not self.last_fetch_ok) or stale_due_age or (not has_messages) or stale_no_change or stale_failures
         self.status_pill.set_live(not is_stale)
+        status_text = "Live feed" if not is_stale else "Stale feed"
+        status_color = "#56CC9D" if not is_stale else "#E0A800"
+        self.feed_status_value.setText(status_text)
+        self.feed_status_value.setStyleSheet(f"color: {status_color};")
         self.adjust_sidebar_fonts()
 
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
