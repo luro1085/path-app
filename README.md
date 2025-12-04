@@ -7,6 +7,7 @@ Windows-first PyQt6 display for live PATH arrivals from `ridepath.json`. Sized e
 - In this folder: `python -m venv .venv` then `.\.venv\Scripts\activate`.
 - Install deps: `pip install -r requirements.txt`.
 - Adjust `config.json` if desired (created automatically if missing).
+- `start.bat` centralizes Python bytecode into `.pycache/` (sets `PYTHONPYCACHEPREFIX`) to keep the tree clean.
 
 ## Run
 - `start.bat` launches the borderless 1920×720 window.
@@ -52,3 +53,4 @@ Windows-first PyQt6 display for live PATH arrivals from `ridepath.json`. Sized e
   - To target a specific user: add `-User "MACHINE\\kioskuser"`.
 - Set Windows auto-logon for the kiosk user (netplwiz or registry) so the device boots straight into the account and launches the task.
 - Lock down power/sleep/screensaver and notifications to avoid interruptions.
+- VS Code workspace: `path_app/path-app.code-workspace`.
