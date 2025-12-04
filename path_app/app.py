@@ -20,6 +20,7 @@ FEED_URL = "https://www.panynj.gov/bin/portauthority/ridepath.json"
 LOGO_PATH = Path("PATH_logo.png")
 HOBOKEN_LOGO_PATH = Path("Hoboken_logo-final_Teal_Round.png")
 LOGO_ASPECT = 2560 / 1318
+ICON_PATH = Path("app-icon.ico") if Path("app-icon.ico").exists() else Path("app-icon.png")
 
 
 def fit_label(
@@ -342,6 +343,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.consecutive_failures: int = 0
 
         self.setWindowTitle("PATH Arrivals - Hoboken")
+        if ICON_PATH.exists():
+            self.setWindowIcon(QtGui.QIcon(str(ICON_PATH)))
         self.setWindowFlag(QtCore.Qt.WindowType.FramelessWindowHint, True)
         self.setWindowFlag(QtCore.Qt.WindowType.WindowStaysOnTopHint, True)
         self.setFixedSize(1920, 720)

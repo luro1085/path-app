@@ -1,0 +1,21 @@
+# Build artifacts
+build/
+dist/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Virtual envs
+.venv/
+venv/
+
+# Logs
+logs/
+
+# PyInstaller
+*.spec
+
+# OS
+Thumbs.db
+.DS_Store

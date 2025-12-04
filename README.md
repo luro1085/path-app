@@ -43,4 +43,12 @@ Windows-first PyQt6 display for live PATH arrivals from `ridepath.json`. Sized e
 
 ## Optional: Single EXE
 - Install PyInstaller (`pip install pyinstaller`).
-- Build: `pyinstaller path_app.spec` (bundles defaults and runs windowed/no-console).
+- Build: `pyinstaller path_app.spec` (bundles defaults, PNG assets, and sets the EXE icon from `app-icon.png`). Copy `config.json` and `PATH_logo.png` next to the EXE if you change them.
+
+## Kiosk-style autostart (Windows)
+- Build the EXE (above) or use `start.bat` with Python installed.
+- Register a Scheduled Task to start at logon (powershell as admin):
+  `powershell -ExecutionPolicy Bypass -File scripts\register_kiosk_task.ps1 -AppPath "C:\path\to\path-kiosk.exe" -TaskName "PATHKiosk"`
+  - To target a specific user: add `-User "MACHINE\\kioskuser"`.
+- Set Windows auto-logon for the kiosk user (netplwiz or registry) so the device boots straight into the account and launches the task.
+- Lock down power/sleep/screensaver and notifications to avoid interruptions.
