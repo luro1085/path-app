@@ -421,7 +421,7 @@ class MainWindow(QtWidgets.QMainWindow):
         top_block = QtWidgets.QWidget()
         top_layout = QtWidgets.QVBoxLayout(top_block)
         top_layout.setContentsMargins(0, 0, 0, 0)
-        top_layout.setSpacing(-32)
+        top_layout.setSpacing(-50)
         top_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
         top_layout.addWidget(
             self.hoboken_logo_label,
@@ -434,8 +434,8 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QSizePolicy.Policy.Expanding,
         )
         info_layout = QtWidgets.QVBoxLayout(info_container)
-        info_layout.setContentsMargins(0, -12, 0, 0)
-        info_layout.setSpacing(4)
+        info_layout.setContentsMargins(0, -6, 0, 0)
+        info_layout.setSpacing(6)
         info_layout.setAlignment(
             QtCore.Qt.AlignmentFlag.AlignHCenter
             | QtCore.Qt.AlignmentFlag.AlignVCenter
