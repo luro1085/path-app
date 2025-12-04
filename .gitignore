@@ -1,7 +1,7 @@
 # Build artifacts
 build/
 dist/
-__pycache__/
+path_app/__pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
