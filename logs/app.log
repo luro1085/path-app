@@ -1,0 +1,2 @@
+2025-12-05 11:01:42 [WARNING] root - Fetch failed: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))
+2025-12-05 11:01:42 [WARNING] root - Fetch failed: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))

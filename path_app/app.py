@@ -6,8 +6,10 @@ import threading
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Callable
 import random
+import os
+import html
 
 import requests
 from PyQt6 import QtCore, QtGui, QtWidgets
@@ -21,6 +23,71 @@ LOGO_PATH = Path("PATH_logo.png")
 HOBOKEN_LOGO_PATH = Path("Hoboken_logo-final_Teal_Round.png")
 LOGO_ASPECT = 2560 / 1318
 ICON_PATH = Path("app-icon.ico") if Path("app-icon.ico").exists() else Path("app-icon.png")
+
+# Optional hardcoded test payload: set PATH_FAKE_FEED=1 to use this instead of live feed
+FAKE_PAYLOAD_HOB = {
+    "consideredStation": "HOB",
+    "destinations": [
+        {
+            "label": "ToNJ",
+            "messages": [
+                {
+                    "target": "JSQ",
+                    "secondsToArrival": "34",
+                    "arrivalTimeMessage": "1 min",
+                    "lineColor": "4D92FB,FF9900",
+                    "headSign": "Journal Square via Hoboken",
+                    "lastUpdated": "2025-10-08T01:45:06.270303-04:00",
+                },
+                {
+                    "target": "JSQ",
+                    "secondsToArrival": "2260",
+                    "arrivalTimeMessage": "38 min",
+                    "lineColor": "4D92FB,FF9900",
+                    "headSign": "Journal Square via Hoboken",
+                    "lastUpdated": "2025-10-08T01:45:06.270303-04:00",
+                },
+                                {
+                    "target": "JSQ",
+                    "secondsToArrival": "3000",
+                    "arrivalTimeMessage": "50 min",
+                    "lineColor": "4D92FB,FF9900",
+                    "headSign": "Journal Square via Hoboken",
+                    "lastUpdated": "2025-10-08T01:45:06.270303-04:00",
+                }
+            ],
+        },
+        {
+            "label": "ToNY",
+            "messages": [
+                {
+                    "target": "33S",
+                    "secondsToArrival": "39",
+                    "arrivalTimeMessage": "1 min",
+                    "lineColor": "4D92FB,FF9900",
+                    "headSign": "33rd Street via Hoboken",
+                    "lastUpdated": "2025-10-08T01:45:06.270303-04:00",
+                },
+                {
+                    "target": "33S",
+                    "secondsToArrival": "2139",
+                    "arrivalTimeMessage": "36 min",
+                    "lineColor": "4D92FB,FF9900",
+                    "headSign": "33rd Street via Hoboken",
+                    "lastUpdated": "2025-10-08T01:45:06.270303-04:00",
+                },
+                                {
+                    "target": "33S",
+                    "secondsToArrival": "3000",
+                    "arrivalTimeMessage": "50 min",
+                    "lineColor": "4D92FB,FF9900",
+                    "headSign": "33rd Street via Hoboken",
+                    "lastUpdated": "2025-10-08T01:45:06.270303-04:00",
+                }
+            ],
+        },
+    ],
+}
 
 
 def fit_label(
@@ -120,6 +187,8 @@ class FetchThread(QtCore.QThread):
         self._stop_event.set()
 
     def _fetch_once(self) -> StationData:
+        if os.getenv("PATH_FAKE_FEED"):
+            return parse_station_data({"results": [FAKE_PAYLOAD_HOB]}, self.config.station)
         resp = self.session.get(FEED_URL, timeout=5)
         resp.raise_for_status()
         return parse_station_data(resp.json(), self.config.station)
@@ -188,25 +257,21 @@ class CardWidget(QtWidgets.QFrame):
         self.setStyleSheet(
             """
             QFrame#card {
-                background-color: transparent;
-                border-radius: 0px;
+                background-color: rgba(13, 20, 31, 0.35);
+                border: 1px solid rgba(255, 255, 255, 1);
+                border-radius: 14px;
                 color: #F5F7FA;
-                border: none;
             }
             """
         )
         self.setMinimumHeight(110)
         layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.setSpacing(10)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(12)
 
         self.fade_effect = QtWidgets.QGraphicsOpacityEffect(self)
         self.setGraphicsEffect(self.fade_effect)
         self.fade_effect.setOpacity(1.0)
-        self.fade_anim = QtCore.QPropertyAnimation(self.fade_effect, b"opacity", self)
-        self.fade_anim.setDuration(260)
-        self.fade_anim.setStartValue(0.0)
-        self.fade_anim.setEndValue(1.0)
 
         self.strip = ColorStrip(
             self, orientation=QtCore.Qt.Orientation.Vertical
@@ -218,15 +283,15 @@ class CardWidget(QtWidgets.QFrame):
         body.setSpacing(10)
         self.headsign_label = QtWidgets.QLabel()
         self.headsign_label.setWordWrap(True)
+        self.headsign_label.setTextFormat(QtCore.Qt.TextFormat.RichText)
         head_font = QtGui.QFont()
         head_font.setFamilies([f.strip() for f in font_family.split(",")])
-        head_font.setPointSize(30)
+        head_font.setPointSize(70)
         head_font.setBold(True)
         self.headsign_label.setFont(head_font)
         self.headsign_label.setAlignment(
             QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
         )
-        self.headsign_label.setStyleSheet("color: #E7ECF3;")
 
         self.arrival_label = QtWidgets.QLabel()
         self.arrival_label.setWordWrap(False)
@@ -242,7 +307,7 @@ class CardWidget(QtWidgets.QFrame):
         self.arrival_label.setMinimumWidth(0)
         self.arrival_label.setStyleSheet("color: #F2C94C;")
 
-        body.addWidget(self.headsign_label, stretch=3)
+        body.addWidget(self.headsign_label, stretch=4)
         body.addWidget(self.arrival_label, stretch=1)
         layout.addLayout(body, stretch=1)
 
@@ -253,16 +318,25 @@ class CardWidget(QtWidgets.QFrame):
 
     def update_from(self, message: TrainMessage) -> None:
         self.strip.set_colors(message.line_colors)
-        head = message.headsign or message.target
-        primary_color = message.line_colors[0] if message.line_colors else "#E7ECF3"
-        self.headsign_label.setStyleSheet(f"color: {primary_color};")
-        self.headsign_label.setText(head.upper())
+        head_raw = message.headsign or message.target
+        head_clean = head_raw.split(" via", 1)[0].split(" VIA", 1)[0]
+        head_upper = head_clean.upper()
+        colors = message.line_colors
+
+        # Directional color rule: ToNJ uses second color if present; ToNY uses first.
+        if message.label == "ToNJ" and len(colors) >= 2:
+            primary_color = colors[1]
+        else:
+            primary_color = colors[0] if colors else "#E7ECF3"
+        self.headsign_label.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        self.headsign_label.setText(
+            f"<span style='color:{primary_color};'>{html.escape(head_upper)}</span>"
+        )
 
         # Arrival time keeps a consistent accent color
         self.arrival_label.setStyleSheet("color: #F2C94C;")
         self.arrival_label.setText(message.arrival_message or f"{message.seconds_to_arrival // 60} min")
         self.direction_label.setText("")
-        self._run_fade()
         QtCore.QTimer.singleShot(0, self.adjust_font_sizes)
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
@@ -270,14 +344,30 @@ class CardWidget(QtWidgets.QFrame):
         self.adjust_font_sizes()
 
     def adjust_font_sizes(self) -> None:
-        fit_label(self.headsign_label, max_point_size=60, min_point_size=20, padding=4, wrap=True)
+        # Keep headsign at its configured font size (no auto-shrink) to maximize size.
         fit_label(self.arrival_label, max_point_size=96, min_point_size=32, padding=4, wrap=False)
 
-    def _run_fade(self) -> None:
-        if self.fade_anim.state() == QtCore.QAbstractAnimation.State.Running:
-            self.fade_anim.stop()
-        self.fade_effect.setOpacity(0.0)
-        self.fade_anim.start()
+    def animate_out(self, on_finished: Callable[[], None]) -> None:
+        """Animate removal: shrink and fade, then call on_finished."""
+        start_height = self.height() if self.height() > 0 else 100
+        self.setMaximumHeight(start_height)
+
+        opacity_anim = QtCore.QPropertyAnimation(self.fade_effect, b"opacity", self)
+        opacity_anim.setDuration(250)
+        opacity_anim.setStartValue(1.0)
+        opacity_anim.setEndValue(0.0)
+
+        height_anim = QtCore.QPropertyAnimation(self, b"maximumHeight", self)
+        height_anim.setDuration(250)
+        height_anim.setStartValue(start_height)
+        height_anim.setEndValue(0)
+
+        group = QtCore.QParallelAnimationGroup(self)
+        group.addAnimation(opacity_anim)
+        group.addAnimation(height_anim)
+        group.finished.connect(on_finished)
+        group.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+        self._exit_anim = group  # keep reference
 
 
 class StatusPill(QtWidgets.QLabel):
@@ -556,9 +646,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def refresh_cards(self) -> None:
         messages = top_messages(self.latest_data.messages if self.latest_data else [], self.config.max_cards)
         if not messages:
-            for widget in self.card_widgets:
-                widget.hide()
             self.placeholder.show()
+            for widget in list(self.card_widgets):
+                self._animate_remove_card(widget)
             return
 
         self.placeholder.hide()
@@ -573,15 +663,14 @@ class MainWindow(QtWidgets.QMainWindow):
             self.cards_layout.addWidget(card)
             self.card_widgets.append(card)
 
-        while len(self.card_widgets) > len(messages):
-            widget = self.card_widgets.pop()
-            self.cards_layout.removeWidget(widget)
-            widget.setParent(None)
-            widget.deleteLater()
-
         for card, message in zip(self.card_widgets, messages):
             card.update_from(message)
             card.show()
+
+        # Animate away any extra cards
+        extra_cards = self.card_widgets[len(messages) :]
+        for widget in list(extra_cards):
+            self._animate_remove_card(widget)
             card.adjust_font_sizes()
 
     def update_status_pill(self) -> None:
@@ -664,6 +753,18 @@ class MainWindow(QtWidgets.QMainWindow):
         fit_label(self.day_label, max_point_size=40, min_point_size=18, padding=4)
         fit_label(self.last_updated_label, max_point_size=34, min_point_size=16, padding=6, wrap=True)
         fit_label(self.status_pill, max_point_size=30, min_point_size=16, padding=12)
+
+    def _animate_remove_card(self, widget: CardWidget) -> None:
+        def finish() -> None:
+            if widget in self.card_widgets:
+                self.card_widgets.remove(widget)
+            self.cards_layout.removeWidget(widget)
+            widget.setParent(None)
+            widget.deleteLater()
+            if not self.card_widgets:
+                self.placeholder.show()
+
+        widget.animate_out(finish)
 
     def _scale_logo(
         self,
