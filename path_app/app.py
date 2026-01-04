@@ -15,7 +15,13 @@ import requests
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from .config import AppConfig, load_config
-from .path_data import StationData, TrainMessage, parse_station_data, top_messages
+from .path_data import (
+    StationData,
+    TrainMessage,
+    build_presumed_tooltip,
+    parse_station_data_with_presumed,
+    top_messages,
+)
 
 LOG_PATH = Path("logs/app.log")
 FEED_URL = "https://www.panynj.gov/bin/portauthority/ridepath.json"
@@ -47,7 +53,7 @@ FAKE_PAYLOAD_HOB = {
                     "headSign": "Journal Square via Hoboken",
                     "lastUpdated": "2025-10-08T01:45:06.270303-04:00",
                 },
-                                {
+                {
                     "target": "JSQ",
                     "secondsToArrival": "3000",
                     "arrivalTimeMessage": "50 min",
@@ -76,7 +82,7 @@ FAKE_PAYLOAD_HOB = {
                     "headSign": "33rd Street via Hoboken",
                     "lastUpdated": "2025-10-08T01:45:06.270303-04:00",
                 },
-                                {
+                {
                     "target": "33S",
                     "secondsToArrival": "3000",
                     "arrivalTimeMessage": "50 min",
@@ -86,6 +92,24 @@ FAKE_PAYLOAD_HOB = {
                 }
             ],
         },
+    ],
+}
+FAKE_PAYLOAD_CHR = {
+    "consideredStation": "CHR",
+    "destinations": [
+        {
+            "label": "ToNJ",
+            "messages": [
+                {
+                    "target": "JSQ",
+                    "secondsToArrival": "600",
+                    "arrivalTimeMessage": "10 min",
+                    "lineColor": "4D92FB,FF9900",
+                    "headSign": "Journal Square via Hoboken",
+                    "lastUpdated": "2025-10-08T01:45:06.270303-04:00",
+                }
+            ],
+        }
     ],
 }
 
@@ -188,10 +212,19 @@ class FetchThread(QtCore.QThread):
 
     def _fetch_once(self) -> StationData:
         if os.getenv("PATH_FAKE_FEED"):
-            return parse_station_data({"results": [FAKE_PAYLOAD_HOB]}, self.config.station)
+            payload = {"results": [FAKE_PAYLOAD_HOB, FAKE_PAYLOAD_CHR]}
+            return parse_station_data_with_presumed(
+                payload,
+                self.config.station,
+                include_presumed=self.config.show_presumed_trains,
+            )
         resp = self.session.get(FEED_URL, timeout=5)
         resp.raise_for_status()
-        return parse_station_data(resp.json(), self.config.station)
+        return parse_station_data_with_presumed(
+            resp.json(),
+            self.config.station,
+            include_presumed=self.config.show_presumed_trains,
+        )
 
     def _next_delay(self, data: StationData) -> float:
         """Adaptive polling interval with jitter."""
@@ -665,6 +698,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         for card, message in zip(self.card_widgets, messages):
             card.update_from(message)
+            card.setToolTip(
+                build_presumed_tooltip(message, self.config.station)
+            )
             card.show()
 
         # Animate away any extra cards

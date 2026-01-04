@@ -15,6 +15,7 @@ Windows-first PyQt6 display for live PATH arrivals from `ridepath.json`. Sized e
 
 ## Config (`config.json`)
 - `station`: station code (default `HOB`).
+- `show_presumed_trains`: include presumed Hoboken -> JSQ trains based on Christopher Street departures (default `true`).
 - Adaptive polling (with jitter ±10%):
   - `poll_baseline_seconds` (default 30)
   - `poll_aggressive_seconds` (<5 min soonest ETA, default 15)

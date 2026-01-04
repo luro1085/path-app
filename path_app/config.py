@@ -8,6 +8,7 @@ from typing import Any, Dict
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "station": "HOB",
+    "show_presumed_trains": True,
     "poll_baseline_seconds": 30,
     "poll_aggressive_seconds": 15,
     "poll_relaxed_seconds": 90,
@@ -28,6 +29,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 @dataclass
 class AppConfig:
     station: str
+    show_presumed_trains: bool
     poll_baseline_seconds: int
     poll_aggressive_seconds: int
     poll_relaxed_seconds: int
@@ -64,6 +66,7 @@ def load_config(path: Path | None = None) -> AppConfig:
     merged = _merge_with_defaults(data)
     return AppConfig(
         station=str(merged["station"]),
+        show_presumed_trains=bool(merged["show_presumed_trains"]),
         poll_baseline_seconds=int(merged["poll_baseline_seconds"]),
         poll_aggressive_seconds=int(merged["poll_aggressive_seconds"]),
         poll_relaxed_seconds=int(merged["poll_relaxed_seconds"]),
