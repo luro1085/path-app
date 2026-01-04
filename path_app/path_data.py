@@ -6,7 +6,7 @@ import re
 from typing import Any, List, Optional
 
 
-ARRIVAL_LEAD_SECONDS = 60
+ARRIVAL_LEAD_SECONDS = 90
 MIN_SECONDS_TO_SHOW = 90
 
 

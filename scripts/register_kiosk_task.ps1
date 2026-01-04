@@ -11,8 +11,10 @@ if (-not (Test-Path $AppPath)) {
     exit 1
 }
 
-$action = New-ScheduledTaskAction -Execute $AppPath -WorkingDirectory (Split-Path $AppPath)
-$trigger = New-ScheduledTaskTrigger -AtLogOn
+$action    = New-ScheduledTaskAction -Execute $AppPath -WorkingDirectory (Split-Path $AppPath)
+
+$trigger   = New-ScheduledTaskTrigger -AtLogOn -User $User
+
 $principal = New-ScheduledTaskPrincipal -UserId $User -LogonType Interactive -RunLevel Highest
 
 try {
@@ -22,4 +24,3 @@ try {
     Write-Error "Failed to register task: $_"
     exit 1
 }
-
