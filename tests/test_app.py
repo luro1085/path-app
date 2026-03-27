@@ -31,6 +31,7 @@ def test_compact_arrival_text_formats_minutes_boarding_and_status() -> None:
     assert compact_arrival_text("12 min") == "12MIN"
     assert compact_arrival_text("~8 min") == "~8MIN"
     assert compact_arrival_text("8 min", is_presumed=True) == "~8MIN"
+    assert compact_arrival_text("0 min") == "DUE"
     assert compact_arrival_text("Boarding") == "BOARD"
     assert compact_arrival_text("Delayed") == "DELAY"
 

@@ -35,6 +35,8 @@ def compact_arrival_text(arrival_message: str, *, is_presumed: bool = False) -> 
 
     minute_match = re.fullmatch(r"(~?)(\d+)\s*MIN", text)
     if minute_match:
+        if minute_match.group(2) == "0":
+            return "DUE"
         return f"{minute_match.group(1)}{minute_match.group(2)}MIN"
     if text == "BOARDING":
         return "BOARD"
@@ -88,6 +90,12 @@ def build_train_row_colors(msg: TrainMessage, row_text: str) -> list[Any]:
         is_presumed=msg.backfill_source is not None,
     )
     time_start = len(row_text) - len(time_text)
+
+    if time_text == "DUE":
+        for idx in range(time_start, min(time_start + 3, GRID_COLS)):
+            colors[idx] = {"fg": "#FFFFFF", "bg": route_color}
+        return colors
+
     match = re.match(r"~?\d+", time_text)
     if not match:
         return colors

@@ -134,6 +134,7 @@ class FetchThread(QtCore.QThread):
         self.session = requests.Session()
         self._stop_event = threading.Event()
         self._backoff_seconds = 5
+        self._fetch_count = 0
 
     def run(self) -> None:
         delay = 0
@@ -146,6 +147,9 @@ class FetchThread(QtCore.QThread):
                 self.data_received.emit(station_data)
                 self._backoff_seconds = self.config.poll_baseline_seconds
                 delay = self._next_delay(station_data)
+                self._fetch_count += 1
+                if self._fetch_count % 5000 == 0:
+                    self._recycle_session()
             except Exception as exc:  # pragma: no cover - network issues
                 logging.warning("Fetch failed: %s", exc)
                 self.fetch_failed.emit(str(exc))
@@ -157,6 +161,14 @@ class FetchThread(QtCore.QThread):
 
     def stop(self) -> None:
         self._stop_event.set()
+
+    def _recycle_session(self) -> None:
+        """Close and recreate the HTTP session to prevent connection pool bloat."""
+        try:
+            self.session.close()
+        except Exception:
+            pass
+        self.session = requests.Session()
 
     def _fetch_once(self) -> StationData:
         include_presumed = self.config.show_presumed_trains and is_presumed_service_active(datetime.now())
