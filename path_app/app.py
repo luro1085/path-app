@@ -1,34 +1,32 @@
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import threading
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import List, Optional, Callable
+from typing import Optional
 import random
 import os
-import html
 
 import requests
 from PyQt6 import QtCore, QtGui, QtWidgets
+from PyQt6.QtWebEngineWidgets import QWebEngineView  # type: ignore[import-untyped]
+from PyQt6.QtWebEngineCore import QWebEngineSettings  # type: ignore[import-untyped]
 
+from .board_format import build_board_rows, has_delayed_visible_trains
 from .config import AppConfig, load_config
 from .path_data import (
+    STATION_DISPLAY_NAMES,
     StationData,
-    TrainMessage,
-    build_presumed_tooltip,
     is_presumed_service_active,
     parse_station_data_with_presumed,
-    top_messages,
 )
 
 LOG_PATH = Path("logs/app.log")
 FEED_URL = "https://www.panynj.gov/bin/portauthority/ridepath.json"
-LOGO_PATH = Path("PATH_logo.png")
-HOBOKEN_LOGO_PATH = Path("Hoboken_logo-final_Teal_Round.png")
-LOGO_ASPECT = 2560 / 1318
 ICON_PATH = Path("app-icon.ico") if Path("app-icon.ico").exists() else Path("app-icon.png")
 
 # Optional hardcoded test payload: set PATH_FAKE_FEED=1 to use this instead of live feed
@@ -41,7 +39,7 @@ FAKE_PAYLOAD_HOB = {
                 {
                     "target": "JSQ",
                     "secondsToArrival": "34",
-                    "arrivalTimeMessage": "1 min",
+                    "arrivalTimeMessage": "Delayed",
                     "lineColor": "4D92FB,FF9900",
                     "headSign": "Journal Square via Hoboken",
                     "lastUpdated": "2025-10-08T01:45:06.270303-04:00",
@@ -115,47 +113,6 @@ FAKE_PAYLOAD_CHR = {
 }
 
 
-def fit_label(
-    label: QtWidgets.QLabel,
-    max_point_size: float,
-    min_point_size: float = 8,
-    padding: int = 0,
-    wrap: bool = False,
-) -> None:
-    """Shrink text until it fits within the label's current box."""
-    if label.width() <= 0 or label.height() <= 0:
-        return
-    text = label.text()
-    if not text:
-        return
-    avail_w = max(4, label.width() - padding)
-    avail_h = max(4, label.height() - padding)
-    flags = QtCore.Qt.TextFlag.TextWordWrap if wrap else QtCore.Qt.TextFlag(0)
-    align_flags = (
-        QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop
-    )
-    chosen_size = min_point_size
-    font = QtGui.QFont(label.font())
-    size = max_point_size
-    while size >= min_point_size:
-        font.setPointSizeF(size)
-        metrics = QtGui.QFontMetrics(font)
-        if wrap:
-            rect = metrics.boundingRect(
-                QtCore.QRect(0, 0, avail_w, 10_000),
-                int(flags | align_flags),
-                text,
-            )
-        else:
-            rect = metrics.boundingRect(text)
-        if rect.width() <= avail_w and rect.height() <= avail_h:
-            chosen_size = size
-            break
-        size -= 1
-    font.setPointSizeF(chosen_size)
-    label.setFont(font)
-
-
 def setup_logging() -> None:
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(LOG_PATH, maxBytes=512_000, backupCount=3)
@@ -165,16 +122,6 @@ def setup_logging() -> None:
     )
     handler.setFormatter(formatter)
     logging.basicConfig(level=logging.INFO, handlers=[handler])
-
-
-def ensure_dpi_awareness() -> None:
-    """Opt into per-monitor DPI awareness on Windows for crisp text."""
-    try:
-        import ctypes
-
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except Exception:
-        pass
 
 
 class FetchThread(QtCore.QThread):
@@ -244,212 +191,6 @@ class FetchThread(QtCore.QThread):
         return max(5, base * jitter)
 
 
-class ColorStrip(QtWidgets.QWidget):
-    def __init__(
-        self,
-        parent: Optional[QtWidgets.QWidget] = None,
-        orientation: QtCore.Qt.Orientation = QtCore.Qt.Orientation.Horizontal,
-    ) -> None:
-        super().__init__(parent)
-        self.orientation = orientation
-        if orientation == QtCore.Qt.Orientation.Horizontal:
-            self.setFixedHeight(8)
-            self.setSizePolicy(
-                QtWidgets.QSizePolicy.Policy.Expanding,
-                QtWidgets.QSizePolicy.Policy.Fixed,
-            )
-        else:
-            self.setFixedWidth(12)
-            self.setSizePolicy(
-                QtWidgets.QSizePolicy.Policy.Fixed,
-                QtWidgets.QSizePolicy.Policy.Expanding,
-            )
-
-    def set_colors(self, colors: List[str]) -> None:
-        if not colors:
-            colors = ["#999999"]
-        if len(colors) == 1:
-            style = f"background-color: {colors[0]};"
-        else:
-            c1, c2 = colors[0], colors[1]
-            direction = (
-                "x1:0, y1:0, x2:1, y2:0"
-                if self.orientation == QtCore.Qt.Orientation.Horizontal
-                else "x1:0, y1:0, x2:0, y2:1"
-            )
-            style = (
-                f"background: qlineargradient({direction}, "
-                f"stop:0 {c1}, stop:0.5 {c1}, stop:0.5 {c2}, stop:1 {c2});"
-            )
-        self.setStyleSheet(style)
-
-
-class CardWidget(QtWidgets.QFrame):
-    def __init__(self, font_family: str, parent: Optional[QtWidgets.QWidget] = None):
-        super().__init__(parent)
-        self.setObjectName("card")
-        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        self.setStyleSheet(
-            """
-            QFrame#card {
-                background-color: rgba(13, 20, 31, 0.35);
-                border: 1px solid rgba(255, 255, 255, 1);
-                border-radius: 14px;
-                color: #F5F7FA;
-            }
-            """
-        )
-        self.setMinimumHeight(110)
-        layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(12)
-
-        self.fade_effect = QtWidgets.QGraphicsOpacityEffect(self)
-        self.setGraphicsEffect(self.fade_effect)
-        self.fade_effect.setOpacity(1.0)
-
-        self.strip = ColorStrip(
-            self, orientation=QtCore.Qt.Orientation.Vertical
-        )
-        layout.addWidget(self.strip)
-
-        body = QtWidgets.QHBoxLayout()
-        body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(10)
-        self.headsign_label = QtWidgets.QLabel()
-        self.headsign_label.setWordWrap(True)
-        self.headsign_label.setTextFormat(QtCore.Qt.TextFormat.RichText)
-        head_font = QtGui.QFont()
-        head_font.setFamilies([f.strip() for f in font_family.split(",")])
-        head_font.setPointSize(70)
-        head_font.setBold(True)
-        self.headsign_label.setFont(head_font)
-        self.headsign_label.setAlignment(
-            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
-        )
-
-        self.arrival_label = QtWidgets.QLabel()
-        self.arrival_label.setWordWrap(False)
-        arr_font = QtGui.QFont()
-        arr_font.setFamilies([f.strip() for f in font_family.split(",")])
-        arr_font.setPointSize(48)
-        arr_font.setBold(True)
-        self.arrival_label.setFont(arr_font)
-        self.arrival_label.setAlignment(
-            QtCore.Qt.AlignmentFlag.AlignRight
-            | QtCore.Qt.AlignmentFlag.AlignVCenter
-        )
-        self.arrival_label.setMinimumWidth(0)
-        self.arrival_label.setStyleSheet("color: #F2C94C;")
-
-        body.addWidget(self.headsign_label, stretch=4)
-        body.addWidget(self.arrival_label, stretch=1)
-        layout.addLayout(body, stretch=1)
-
-    def update_from(self, message: TrainMessage) -> None:
-        self.strip.set_colors(message.line_colors)
-        head_raw = message.headsign or message.target
-        head_clean = head_raw.split(" via", 1)[0].split(" VIA", 1)[0]
-        head_upper = head_clean.upper()
-        colors = message.line_colors
-
-        # Directional color rule: ToNJ uses second color if present; ToNY uses first.
-        if message.label == "ToNJ" and len(colors) >= 2:
-            primary_color = colors[1]
-        else:
-            primary_color = colors[0] if colors else "#E7ECF3"
-        self.headsign_label.setTextFormat(QtCore.Qt.TextFormat.RichText)
-        self.headsign_label.setText(
-            f"<span style='color:{primary_color};'>{html.escape(head_upper)}</span>"
-        )
-
-        # Arrival time keeps a consistent accent color
-        self.arrival_label.setStyleSheet("color: #F2C94C;")
-        self.arrival_label.setText(message.arrival_message or f"{message.seconds_to_arrival // 60} min")
-        QtCore.QTimer.singleShot(0, self.adjust_font_sizes)
-
-    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
-        super().resizeEvent(event)
-        self.adjust_font_sizes()
-
-    def adjust_font_sizes(self) -> None:
-        # Keep headsign at its configured font size (no auto-shrink) to maximize size.
-        fit_label(self.arrival_label, max_point_size=96, min_point_size=32, padding=4, wrap=False)
-
-    def animate_out(self, on_finished: Callable[[], None]) -> None:
-        """Animate removal: shrink and fade, then call on_finished."""
-        start_height = self.height() if self.height() > 0 else 100
-        self.setMaximumHeight(start_height)
-
-        opacity_anim = QtCore.QPropertyAnimation(self.fade_effect, b"opacity", self)
-        opacity_anim.setDuration(250)
-        opacity_anim.setStartValue(1.0)
-        opacity_anim.setEndValue(0.0)
-
-        height_anim = QtCore.QPropertyAnimation(self, b"maximumHeight", self)
-        height_anim.setDuration(250)
-        height_anim.setStartValue(start_height)
-        height_anim.setEndValue(0)
-
-        group = QtCore.QParallelAnimationGroup(self)
-        group.addAnimation(opacity_anim)
-        group.addAnimation(height_anim)
-        group.finished.connect(on_finished)
-        group.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
-        self._exit_anim = group  # keep reference
-
-
-class StatusPill(QtWidgets.QLabel):
-    def __init__(self, font_family: str, parent: Optional[QtWidgets.QWidget] = None):
-        super().__init__(parent)
-        font = QtGui.QFont()
-        font.setFamilies([f.strip() for f in font_family.split(",")])
-        font.setPointSize(20)
-        font.setBold(True)
-        self.setFont(font)
-        self.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.setMinimumWidth(160)
-        self.setMinimumHeight(52)
-        self.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Fixed,
-        )
-        self.setObjectName("pill")
-        self.setStyleSheet(
-            """
-            QLabel#pill {
-                border-radius: 18px;
-                color: #0D141F;
-                background-color: #56CC9D;
-            }
-            """
-        )
-
-    def set_live(self, live: bool) -> None:
-        if live:
-            self.setText("LIVE")
-            self.setStyleSheet(
-                """
-                QLabel#pill {
-                    border-radius: 18px;
-                    color: #0D141F;
-                    background-color: #56CC9D;
-                }
-                """
-            )
-        else:
-            self.setText("STALE")
-            self.setStyleSheet(
-                """
-                QLabel#pill {
-                    border-radius: 18px;
-                    color: #0D141F;
-                    background-color: #E0A800;
-                }
-                """
-            )
-
-
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, config: AppConfig):
         super().__init__()
@@ -460,6 +201,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.last_signature: Optional[tuple] = None
         self.unchanged_polls: int = 0
         self.consecutive_failures: int = 0
+        self._page_ready = False
+        self._pending_update = False
 
         self.setWindowTitle("PATH Arrivals - Hoboken")
         if ICON_PATH.exists():
@@ -467,189 +210,72 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowFlag(QtCore.Qt.WindowType.FramelessWindowHint, True)
         self.setWindowFlag(QtCore.Qt.WindowType.WindowStaysOnTopHint, True)
         self.setFixedSize(1920, 720)
-        self.setStyleSheet("background-color: #0A111A;")
+        self.setStyleSheet("background-color: #111;")
         self.move(0, 0)
 
         self._build_ui()
-        self._start_timers()
 
         self.fetch_thread = FetchThread(self.config)
         self.fetch_thread.data_received.connect(self.on_data_received)
         self.fetch_thread.fetch_failed.connect(self.on_fetch_failed)
         self.fetch_thread.start()
 
+        # Periodic staleness check — re-evaluate every second like the old app
+        self._staleness_timer = QtCore.QTimer(self)
+        self._staleness_timer.setInterval(1000)
+        self._staleness_timer.timeout.connect(self._send_status)
+        self._staleness_timer.start()
+
     def _build_ui(self) -> None:
         central = QtWidgets.QWidget()
-        layout = QtWidgets.QHBoxLayout(central)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(18)
+        layout = QtWidgets.QVBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
 
-        # Left area
-        self.cards_container = QtWidgets.QWidget()
-        self.cards_layout = QtWidgets.QVBoxLayout(self.cards_container)
-        self.cards_layout.setContentsMargins(0, 0, 0, 0)
-        self.cards_layout.setSpacing(10)
-        self.cards_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop)
-        layout.addWidget(self.cards_container, stretch=5)
+        self.web_view = QWebEngineView()
+        self.web_view.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.NoContextMenu)
 
-        self.card_widgets: List[CardWidget] = []
-        self.placeholder = QtWidgets.QLabel("No upcoming trains posted")
-        placeholder_font = QtGui.QFont()
-        placeholder_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
-        placeholder_font.setPointSize(26)
-        self.placeholder.setFont(placeholder_font)
-        self.placeholder.setStyleSheet("color: #7B8A9A;")
-        self.placeholder.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.cards_layout.addWidget(self.placeholder)
-
-        # Right area
-        sidebar = QtWidgets.QFrame()
-        self.sidebar = sidebar
-        sidebar.setMinimumWidth(320)
-        sidebar.setStyleSheet(
-            "background-color: #0F1825; border-radius: 12px; color: #E7ECF3;"
-        )
-        side_layout = QtWidgets.QVBoxLayout(sidebar)
-        side_layout.setContentsMargins(12, 8, 12, 4)
-        side_layout.setSpacing(2)
-        side_layout.setAlignment(
-            QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignTop
+        # Allow audio autoplay (no user gesture needed in kiosk)
+        settings = self.web_view.page().settings()
+        settings.setAttribute(
+            QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False
         )
 
-        # Hoboken logo above status content
-        self.hoboken_logo_label = QtWidgets.QLabel()
-        self.hoboken_logo_label.setAlignment(
-            QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignVCenter
-        )
-        self.hoboken_logo_label.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Preferred,
-        )
-        self.hoboken_logo_pixmap = (
-            QtGui.QPixmap(str(HOBOKEN_LOGO_PATH))
-            if HOBOKEN_LOGO_PATH.exists()
-            else QtGui.QPixmap()
-        )
-        if self.hoboken_logo_pixmap.isNull():
-            hoboken_font = QtGui.QFont()
-            hoboken_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
-            hoboken_font.setPointSize(18)
-            hoboken_font.setBold(True)
-            self.hoboken_logo_label.setFont(hoboken_font)
-            self.hoboken_logo_label.setStyleSheet("color: #56CC9D;")
-            self.hoboken_logo_label.setText("HOBOKEN")
+        self.web_view.loadFinished.connect(self._on_page_loaded)
 
-        # Top block with logo and info, allowing slight overlap upward
-        top_block = QtWidgets.QWidget()
-        top_layout = QtWidgets.QVBoxLayout(top_block)
-        top_layout.setContentsMargins(0, 0, 0, 0)
-        top_layout.setSpacing(-50)
-        top_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
-        top_layout.addWidget(
-            self.hoboken_logo_label,
-            alignment=QtCore.Qt.AlignmentFlag.AlignCenter,
-        )
+        # Resolve path to web/index.html
+        if getattr(sys, "frozen", False):
+            base_path = Path(sys._MEIPASS)
+        else:
+            base_path = Path(__file__).parent
+        web_path = base_path / "web" / "index.html"
+        self.web_view.setUrl(QtCore.QUrl.fromLocalFile(str(web_path)))
 
-        info_container = QtWidgets.QWidget()
-        info_container.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Expanding,
-        )
-        info_layout = QtWidgets.QVBoxLayout(info_container)
-        info_layout.setContentsMargins(0, -6, 0, 0)
-        info_layout.setSpacing(6)
-        info_layout.setAlignment(
-            QtCore.Qt.AlignmentFlag.AlignHCenter
-            | QtCore.Qt.AlignmentFlag.AlignVCenter
-        )
-
-        self.clock_label = QtWidgets.QLabel("--:--")
-        clock_font = QtGui.QFont()
-        clock_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
-        clock_font.setPointSize(46)
-        clock_font.setBold(True)
-        self.clock_label.setFont(clock_font)
-        self.clock_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        info_layout.addWidget(self.clock_label)
-
-        self.day_label = QtWidgets.QLabel("")
-        day_font = QtGui.QFont()
-        day_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
-        day_font.setPointSize(18)
-        self.day_label.setFont(day_font)
-        self.day_label.setStyleSheet("color: #9FB3C8;")
-        self.day_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        info_layout.addWidget(self.day_label)
-
-        self.last_updated_label = QtWidgets.QLabel("Last updated: --:--:--")
-        last_font = QtGui.QFont()
-        last_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
-        last_font.setPointSize(18)
-        self.last_updated_label.setFont(last_font)
-        self.last_updated_label.setStyleSheet("color: #C9D7E3;")
-        self.last_updated_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        info_layout.addWidget(self.last_updated_label)
-
-        self.status_pill = StatusPill(self.config.font_family)
-        info_layout.addWidget(
-            self.status_pill, alignment=QtCore.Qt.AlignmentFlag.AlignCenter
-        )
-
-        top_layout.addWidget(info_container, stretch=1)
-        top_block.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Maximum,
-        )
-        side_layout.addWidget(top_block)
-        # Push the PATH logo downward slightly with a fixed spacer
-        side_layout.addItem(
-            QtWidgets.QSpacerItem(
-                0,
-                40,
-                QtWidgets.QSizePolicy.Policy.Minimum,
-                QtWidgets.QSizePolicy.Policy.Fixed,
-            )
-        )
-
-        # PATH logo beneath status panel
-        self.logo_label = QtWidgets.QLabel()
-        self.logo_label.setAlignment(
-            QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignVCenter
-        )
-        self.logo_label.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Maximum,
-        )
-        self.logo_pixmap = QtGui.QPixmap(str(LOGO_PATH)) if LOGO_PATH.exists() else QtGui.QPixmap()
-        if self.logo_pixmap.isNull():
-            logo_font = QtGui.QFont()
-            logo_font.setFamilies([f.strip() for f in self.config.font_family.split(",")])
-            logo_font.setPointSize(20)
-            logo_font.setBold(True)
-            self.logo_label.setFont(logo_font)
-            self.logo_label.setStyleSheet("color: #E7ECF3;")
-            self.logo_label.setText("PATH")
-        side_layout.addWidget(
-            self.logo_label, alignment=QtCore.Qt.AlignmentFlag.AlignCenter
-        )
-        QtCore.QTimer.singleShot(0, self.update_logo_size)
-        layout.addWidget(sidebar, stretch=1)
-
+        layout.addWidget(self.web_view)
         self.setCentralWidget(central)
 
-    def _start_timers(self) -> None:
-        self.clock_timer = QtCore.QTimer(self)
-        self.clock_timer.setInterval(1000)
-        self.clock_timer.timeout.connect(self.update_clock)
-        self.clock_timer.start()
-        QtCore.QTimer.singleShot(0, self.adjust_sidebar_fonts)
+    def _on_page_loaded(self, ok: bool) -> None:
+        if not ok:
+            logging.error("Failed to load web UI")
+            return
+        self._page_ready = True
 
-    def update_clock(self) -> None:
-        now = datetime.now()
-        self.clock_label.setText(now.strftime("%I:%M %p"))
-        self.day_label.setText(now.strftime("%A"))
-        self.update_status_pill()
-        self.adjust_sidebar_fonts()
+        # Set station name
+        station_name = STATION_DISPLAY_NAMES.get(
+            self.config.station, self.config.station
+        )
+        self._run_js(f"setStation({json.dumps(station_name)})")
+
+        # Send initial status
+        self._send_status()
+
+        # If data arrived before page loaded, send it now
+        if self._pending_update:
+            self._pending_update = False
+            self.refresh_board()
+
+    def _run_js(self, code: str) -> None:
+        if self._page_ready:
+            self.web_view.page().runJavaScript(code)
 
     def on_data_received(self, data: StationData) -> None:
         self.latest_data = data
@@ -663,53 +289,56 @@ class MainWindow(QtWidgets.QMainWindow):
             self.unchanged_polls = 0
             self.last_signature = signature
         self.last_successful_fetch = datetime.now(timezone.utc)
-        self.refresh_cards()
-        self.update_status_pill()
+
+        if self._page_ready:
+            self.refresh_board()
+            self._send_status()
+        else:
+            self._pending_update = True
 
     def on_fetch_failed(self, error_message: str) -> None:
         logging.warning("Fetch failed: %s", error_message)
         self.last_fetch_ok = False
         self.consecutive_failures += 1
-        self.update_status_pill()
+        self._send_status()
 
-    def refresh_cards(self) -> None:
-        messages = top_messages(self.latest_data.messages if self.latest_data else [], self.config.max_cards)
-        if not messages:
-            self.placeholder.show()
-            for widget in list(self.card_widgets):
-                self._animate_remove_card(widget)
-            return
+    def refresh_board(self) -> None:
+        rows = build_board_rows(
+            self.latest_data.messages if self.latest_data else [],
+            self.config.max_cards,
+        )
+        data = json.dumps({"rows": rows})
+        self._run_js(f"updateBoard({data})")
 
-        self.placeholder.hide()
-        # Update existing widgets or add/remove to match message count
-        while len(self.card_widgets) < len(messages):
-            card = CardWidget(self.config.font_family, self.cards_container)
-            card.setMinimumHeight(110)
-            card.setSizePolicy(
-                QtWidgets.QSizePolicy.Policy.Expanding,
-                QtWidgets.QSizePolicy.Policy.Preferred,
-            )
-            self.cards_layout.addWidget(card)
-            self.card_widgets.append(card)
-
-        for card, message in zip(self.card_widgets, messages):
-            card.update_from(message)
-            card.setToolTip(
-                build_presumed_tooltip(message, self.config.station)
-            )
-            card.show()
-
-        # Animate away any extra cards
-        extra_cards = self.card_widgets[len(messages) :]
-        for widget in list(extra_cards):
-            self._animate_remove_card(widget)
-            card.adjust_font_sizes()
-
-    def update_status_pill(self) -> None:
+    def _send_status(self) -> None:
         data = self.latest_data
         last_update = data.last_updated if data else None
+
+        is_stale = self._compute_staleness()
+        has_delay = (
+            data is not None
+            and bool(data.messages)
+            and has_delayed_visible_trains(data.messages, self.config.max_cards)
+        )
+
+        if is_stale:
+            status = "STALE"
+        elif has_delay:
+            status = "DELAY"
+        else:
+            status = "LIVE"
+
+        if last_update:
+            display_time = last_update.astimezone().strftime("%I:%M:%S %p")
+        else:
+            display_time = "--:--:-- --"
+
+        self._run_js(f"setStatus({json.dumps(status)}, {json.dumps(display_time)})")
+
+    def _compute_staleness(self) -> bool:
+        data = self.latest_data
         now = datetime.now(timezone.utc)
-        stale_due_age = True
+
         ttl_seconds = self.config.ttl_seconds
         if data and data.messages:
             soonest = min(msg.seconds_to_arrival for msg in data.messages)
@@ -717,21 +346,23 @@ class MainWindow(QtWidgets.QMainWindow):
                 ttl_seconds = self.config.ttl_aggressive_seconds
             else:
                 ttl_seconds = max(ttl_seconds, int(self.config.poll_baseline_seconds * 1.5))
+
+        stale_due_age = True
         if self.last_successful_fetch:
             age = (now - self.last_successful_fetch).total_seconds()
             stale_due_age = age > ttl_seconds
-        if last_update:
-            display_time = last_update.astimezone().strftime("%I:%M:%S %p")
-            self.last_updated_label.setText(f"Last updated: {display_time}")
-        else:
-            self.last_updated_label.setText("Last updated: --:--:--")
 
         has_messages = bool(data and data.messages)
         stale_no_change = self.unchanged_polls >= self.config.stale_no_change_polls
         stale_failures = self.consecutive_failures >= self.config.stale_failure_polls
-        is_stale = (not self.last_fetch_ok) or stale_due_age or (not has_messages) or stale_no_change or stale_failures
-        self.status_pill.set_live(not is_stale)
-        self.adjust_sidebar_fonts()
+
+        return (
+            (not self.last_fetch_ok)
+            or stale_due_age
+            or (not has_messages)
+            or stale_no_change
+            or stale_failures
+        )
 
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
         if event.key() == QtCore.Qt.Key.Key_Q and event.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier:
@@ -740,37 +371,12 @@ class MainWindow(QtWidgets.QMainWindow):
             super().keyPressEvent(event)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        if hasattr(self, "_staleness_timer"):
+            self._staleness_timer.stop()
         if hasattr(self, "fetch_thread"):
             self.fetch_thread.stop()
             self.fetch_thread.wait(2000)
         super().closeEvent(event)
-
-    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
-        self.update_logo_size()
-        super().resizeEvent(event)
-        QtCore.QTimer.singleShot(0, self.adjust_sidebar_fonts)
-
-    def update_logo_size(self) -> None:
-        sidebar_width = self.sidebar.width() if hasattr(self, "sidebar") else 300
-        sidebar_height = self.sidebar.height() if hasattr(self, "sidebar") else 400
-        margin_allowance = 36
-        max_width = max(120, sidebar_width - margin_allowance)
-        # Keep top logo modest; leave room for text stack
-        self._scale_logo(
-            label=getattr(self, "hoboken_logo_label", None),
-            pixmap=getattr(self, "hoboken_logo_pixmap", None),
-            max_width=max_width,
-            max_height=max(240, int(sidebar_height * 0.45)),
-        )
-
-        # Bottom PATH logo uses the lower half
-        self._scale_logo(
-            label=getattr(self, "logo_label", None),
-            pixmap=getattr(self, "logo_pixmap", None),
-            max_width=max_width,
-            max_height=max(100, int(sidebar_height * 0.3)),
-            aspect=LOGO_ASPECT,
-        )
 
     def _build_signature(self, data: StationData | None) -> tuple:
         if not data or not data.messages:
@@ -779,61 +385,6 @@ class MainWindow(QtWidgets.QMainWindow):
             (m.headsign, m.target, m.seconds_to_arrival, m.arrival_message, tuple(m.line_colors))
             for m in data.messages
         )
-
-    def adjust_sidebar_fonts(self) -> None:
-        fit_label(self.clock_label, max_point_size=96, min_point_size=46, padding=6)
-        fit_label(self.day_label, max_point_size=40, min_point_size=18, padding=4)
-        fit_label(self.last_updated_label, max_point_size=34, min_point_size=16, padding=6, wrap=True)
-        fit_label(self.status_pill, max_point_size=30, min_point_size=16, padding=12)
-
-    def _animate_remove_card(self, widget: CardWidget) -> None:
-        def finish() -> None:
-            if widget in self.card_widgets:
-                self.card_widgets.remove(widget)
-            self.cards_layout.removeWidget(widget)
-            widget.setParent(None)
-            widget.deleteLater()
-            if not self.card_widgets:
-                self.placeholder.show()
-
-        widget.animate_out(finish)
-
-    def _scale_logo(
-        self,
-        label: Optional[QtWidgets.QLabel],
-        pixmap: Optional[QtGui.QPixmap],
-        max_width: int,
-        max_height: int,
-        aspect: Optional[float] = None,
-    ) -> None:
-        if not label:
-            return
-        if pixmap is None or pixmap.isNull():
-            label.setFixedHeight(max_height)
-            return
-
-        if aspect:
-            target_width = min(max_width, int(max_height * aspect))
-            target_height = int(target_width / aspect)
-            if target_height > max_height:
-                target_height = max_height
-                target_width = int(target_height * aspect)
-        else:
-            ratio = pixmap.width() / pixmap.height() if pixmap.height() else 1
-            target_width = min(max_width, int(max_height * ratio))
-            target_height = int(target_width / ratio) if ratio else max_height
-            if target_height > max_height:
-                target_height = max_height
-                target_width = int(target_height * ratio) if ratio else max_width
-
-        scaled = pixmap.scaled(
-            target_width,
-            target_height,
-            QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-            QtCore.Qt.TransformationMode.SmoothTransformation,
-        )
-        label.setPixmap(scaled)
-        label.setFixedSize(target_width, target_height)
 
 
 def main() -> int:
@@ -844,7 +395,6 @@ def main() -> int:
         attr = getattr(QtCore.Qt.ApplicationAttribute, attr_name, None)
         if attr is not None:
             QtWidgets.QApplication.setAttribute(attr, True)
-    # Prefer crisp scaling on HiDPI displays if available.
     rounding_policy = getattr(
         QtCore.Qt.HighDpiScaleFactorRoundingPolicy, "PassThrough", None
     )
@@ -852,10 +402,6 @@ def main() -> int:
         QtWidgets.QApplication.setHighDpiScaleFactorRoundingPolicy(rounding_policy)
 
     app = QtWidgets.QApplication(sys.argv)
-    font = QtGui.QFont()
-    font.setFamilies([f.strip() for f in config.font_family.split(",")])
-    font.setPointSize(12)
-    app.setFont(font)
     app.setStyle("Fusion")
 
     window = MainWindow(config)

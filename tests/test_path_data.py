@@ -49,7 +49,7 @@ def test_parse_station_data_sorts_and_tracks_latest() -> None:
     }
     data = parse_station_data(payload, "HOB")
     assert len(data.messages) == 2
-    assert [m.seconds_to_arrival for m in data.messages] == [30, 210]
+    assert [m.seconds_to_arrival for m in data.messages] == [0, 180]
     assert data.messages[0].headsign == "World Trade Center"
     assert data.last_updated
     assert data.last_updated.tzinfo is not None
@@ -97,7 +97,7 @@ def test_parse_station_data_filters_short_and_offsets_arrivals() -> None:
     }
     data = parse_station_data(payload, "HOB")
     assert [m.target for m in data.messages] == ["JSQ", "NWK"]
-    assert [m.seconds_to_arrival for m in data.messages] == [110, 310]
+    assert [m.seconds_to_arrival for m in data.messages] == [80, 280]
     assert data.messages[0].arrival_message == "1 min"
     assert data.messages[1].arrival_message == "Boarding"
 

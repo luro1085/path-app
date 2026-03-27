@@ -9,11 +9,13 @@ a = Analysis(
     binaries=[],
     datas=[
         ("config.json", "."),
-        ("PATH_logo.png", "."),
         ("app-icon.ico", "."),
-        ("Hoboken_logo-final_Teal_Round.png", "."),
+        ("path_app/web", "path_app/web"),
     ],
-    hiddenimports=[],
+    hiddenimports=[
+        "PyQt6.QtWebEngineWidgets",
+        "PyQt6.QtWebEngineCore",
+    ],
     hookspath=[],
     runtime_hooks=[],
     excludes=[],
