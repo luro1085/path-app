@@ -1,3 +1,6 @@
 PyQt6>=6.6
 requests>=2.31
+
+# Dev / build
 pytest>=7.4
+pyinstaller>=6.0

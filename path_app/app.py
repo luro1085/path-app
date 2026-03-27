@@ -19,6 +19,7 @@ from .path_data import (
     StationData,
     TrainMessage,
     build_presumed_tooltip,
+    is_presumed_service_active,
     parse_station_data_with_presumed,
     top_messages,
 )
@@ -211,19 +212,20 @@ class FetchThread(QtCore.QThread):
         self._stop_event.set()
 
     def _fetch_once(self) -> StationData:
+        include_presumed = self.config.show_presumed_trains and is_presumed_service_active(datetime.now())
         if os.getenv("PATH_FAKE_FEED"):
             payload = {"results": [FAKE_PAYLOAD_HOB, FAKE_PAYLOAD_CHR]}
             return parse_station_data_with_presumed(
                 payload,
                 self.config.station,
-                include_presumed=self.config.show_presumed_trains,
+                include_presumed=include_presumed,
             )
         resp = self.session.get(FEED_URL, timeout=5)
         resp.raise_for_status()
         return parse_station_data_with_presumed(
             resp.json(),
             self.config.station,
-            include_presumed=self.config.show_presumed_trains,
+            include_presumed=include_presumed,
         )
 
     def _next_delay(self, data: StationData) -> float:
@@ -344,11 +346,6 @@ class CardWidget(QtWidgets.QFrame):
         body.addWidget(self.arrival_label, stretch=1)
         layout.addLayout(body, stretch=1)
 
-        # Direction/label row was requested to be hidden (only show headsign + time)
-        self.direction_label = QtWidgets.QLabel()
-        self.direction_label.setVisible(False)
-        layout.addWidget(self.direction_label)
-
     def update_from(self, message: TrainMessage) -> None:
         self.strip.set_colors(message.line_colors)
         head_raw = message.headsign or message.target
@@ -369,7 +366,6 @@ class CardWidget(QtWidgets.QFrame):
         # Arrival time keeps a consistent accent color
         self.arrival_label.setStyleSheet("color: #F2C94C;")
         self.arrival_label.setText(message.arrival_message or f"{message.seconds_to_arrival // 60} min")
-        self.direction_label.setText("")
         QtCore.QTimer.singleShot(0, self.adjust_font_sizes)
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]

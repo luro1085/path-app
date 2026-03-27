@@ -226,6 +226,24 @@ def build_presumed_tooltip(message: TrainMessage, station_code: str) -> str:
     )
 
 
+def is_presumed_service_active(dt: datetime) -> bool:
+    """Return True when the JSQ-via-Hoboken service runs through Christopher Street.
+
+    Weekends (Sat/Sun): all day.
+    Weekdays (Mon-Fri): late-night only, 11 PM – 6 AM Eastern (local clock).
+    Source: PANYNJ weekday schedule — the JSQ–33 St via Hoboken line runs
+    only from ~10:42 PM JSQ (11:07 PM Chris St) through ~5:39 AM JSQ (5:50 AM Chris St).
+
+    Set PATH_FAKE_SCHEDULE=weekend to force-enable for testing.
+    """
+    import os
+    if os.getenv("PATH_FAKE_SCHEDULE") == "weekend":
+        return True
+    if dt.weekday() >= 5:  # Saturday=5, Sunday=6
+        return True
+    return dt.hour >= 23 or dt.hour < 6
+
+
 def parse_station_data(payload: Any, station_code: str) -> StationData:
     station_entry = _find_station_entry(payload, station_code)
     if not station_entry:
@@ -259,6 +277,7 @@ __all__ = [
     "BackfillSource",
     "TrainMessage",
     "StationData",
+    "is_presumed_service_active",
     "build_presumed_tooltip",
     "parse_station_data",
     "parse_station_data_with_presumed",

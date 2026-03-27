@@ -13,10 +13,12 @@ path_app/__pycache__/
 venv/
 
 # Logs
-logs/
+logs/*
+!logs/.gitkeep
 
 # PyInstaller
 *.spec
+!path_app.spec
 
 # OS
 Thumbs.db

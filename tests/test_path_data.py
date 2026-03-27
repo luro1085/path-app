@@ -4,6 +4,7 @@ import pytest
 
 import path_app.path_data as path_data
 from path_app.path_data import (
+    is_presumed_service_active,
     parse_line_colors,
     parse_station_data,
     parse_station_data_with_presumed,
@@ -144,7 +145,7 @@ def test_presumed_hoboken_trains_backfill_from_christopher() -> None:
         + path_data.HOBOKEN_FROM_CHRISTOPHER_SECONDS
     )
     assert msg.seconds_to_arrival == expected_seconds
-    assert msg.arrival_message.startswith("est ")
+    assert msg.arrival_message.startswith("~")
     assert msg.backfill_source is not None
     assert msg.backfill_source.station_code == "CHR"
 
@@ -195,3 +196,39 @@ def test_presumed_hoboken_trains_dedupes_when_live_exists() -> None:
     data = parse_station_data_with_presumed(payload, "HOB", include_presumed=True)
     assert len(data.messages) == 1
     assert data.messages[0].backfill_source is None
+
+
+# ---------------------------------------------------------------------------
+# is_presumed_service_active — schedule-gating tests
+# ---------------------------------------------------------------------------
+
+def _dt(weekday: int, hour: int) -> datetime:
+    """Build a naive datetime with the given ISO weekday (0=Mon) and hour."""
+    # 2026-03-23 is a Monday; offset by weekday to get any day of the week
+    from datetime import date, time
+    base = date(2026, 3, 23)  # Monday
+    d = base.replace(day=base.day + weekday)
+    return datetime.combine(d, time(hour=hour, minute=0))
+
+
+def test_presumed_service_active_on_weekend() -> None:
+    assert is_presumed_service_active(_dt(5, 10))  # Saturday 10 AM
+    assert is_presumed_service_active(_dt(6, 14))  # Sunday 2 PM
+    assert is_presumed_service_active(_dt(5, 3))   # Saturday 3 AM
+
+
+def test_presumed_service_inactive_weekday_daytime() -> None:
+    assert not is_presumed_service_active(_dt(0, 8))   # Monday 8 AM
+    assert not is_presumed_service_active(_dt(2, 12))  # Wednesday noon
+    assert not is_presumed_service_active(_dt(4, 22))  # Friday 10 PM
+
+
+def test_presumed_service_active_weekday_late_night() -> None:
+    assert is_presumed_service_active(_dt(0, 23))  # Monday 11 PM
+    assert is_presumed_service_active(_dt(3, 1))   # Thursday 1 AM
+    assert is_presumed_service_active(_dt(4, 5))   # Friday 5 AM
+
+
+def test_presumed_service_boundary_6am_weekday() -> None:
+    assert is_presumed_service_active(_dt(1, 5))   # Tuesday 5 AM — still active
+    assert not is_presumed_service_active(_dt(1, 6))  # Tuesday 6 AM — service ended

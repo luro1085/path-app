@@ -8,8 +8,8 @@ Purpose: give an automated assistant a concise map of the codebase so it can tel
 - Install deps: `pip install -r requirements.txt`.
 - First run: `start.bat` (or `python -m path_app`). `config.json` is created with defaults if missing.
 - Adjust `config.json` to change station/polling/fonts. Logs write to `logs/app.log`.
-- Run tests: `python -m pytest tests/test_path_data.py`.
-- Build single-EXE (optional): `pip install pyinstaller` then `pyinstaller path_app.spec` (outputs to `dist/path-kiosk/`).
+- Run tests: `python -m pytest tests/`.
+- Build single-EXE (optional): `pyinstaller path_app.spec` (outputs to `dist/path-kiosk/`); pyinstaller is included in `requirements.txt`.
 - Kiosk auto-start (optional): run `scripts\register_kiosk_task.ps1 -AppPath "<full path to exe or start.bat>" -TaskName "PATHKiosk" [-User "MACHINE\\user"]`.
 
 ## Directory and file map
@@ -19,14 +19,15 @@ Purpose: give an automated assistant a concise map of the codebase so it can tel
   - `path_data.py` Dataclasses and parsing helpers that normalize feed colors, arrival times, and timestamps; used by the UI and tests.
   - `__main__.py` Entry point for `python -m path_app`.
   - `__init__.py` Package marker.
-  - `path-app.code-workspace` VS Code workspace pointing at the repo root.
 - `scripts/`
   - `register_kiosk_task.ps1` Registers a Windows Scheduled Task to launch the EXE or `start.bat` at user logon (runs as the supplied user).
 - `tests/`
   - `test_path_data.py` Unit tests covering feed parsing and color normalization.
+  - `test_config.py` Unit tests covering config loading, merging, and type coercion.
 - Top-level supporting files
   - `start.bat` Convenience launcher; pins `PYTHONPYCACHEPREFIX` to `.pycache/` and calls `python -m path_app`.
-  - `requirements.txt` Runtime/dev dependencies (PyQt6, requests, pytest).
+  - `requirements.txt` Runtime/dev dependencies (PyQt6, requests, pytest, pyinstaller).
+  - `path-app.code-workspace` VS Code workspace pointing at the repo root.
   - `config.json` Runtime settings (auto-generated from defaults; safe to edit).
   - `path_app.spec` PyInstaller spec bundling the app with icons/assets into `dist/path-kiosk/`.
   - Assets: `PATH_logo.png`, `Hoboken_logo-final_Teal_Round.png`, `app-icon.ico` (used in the UI and packaged EXE).
@@ -36,4 +37,4 @@ Purpose: give an automated assistant a concise map of the codebase so it can tel
 1. Install Python 3.11 and clone the repo.
 2. Create/activate `.venv` and `pip install -r requirements.txt`.
 3. Run `start.bat` (or `python -m path_app`) in the repo root; edit `config.json` if needed.
-4. Optional: run tests with pytest; build an EXE with `pyinstaller path_app.spec`; register the scheduled task via the PowerShell script for kiosk mode.
+4. Optional: run tests with `python -m pytest tests/`; build an EXE with `pyinstaller path_app.spec`; register the scheduled task via the PowerShell script for kiosk mode.

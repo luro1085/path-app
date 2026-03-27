@@ -13,5 +13,6 @@
   "stale_failure_polls": 3,
   "stale_after_seconds": 120,
   "max_cards": 5,
-  "font_family": "Inter, Segoe UI, Arial"
+  "font_family": "Inter, Segoe UI, Arial",
+  "show_presumed_trains": true
 }
