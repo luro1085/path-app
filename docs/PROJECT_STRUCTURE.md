@@ -33,7 +33,7 @@ Purpose: give an automated assistant a concise map of the codebase so it can tel
   - Assets: `PATH_logo.png`, `Hoboken_logo-final_Teal_Round.png`, `app-icon.ico` (used in the UI and packaged EXE).
   - Git/runtime noise: `.gitignore`, `.pycache/`, `.pytest_cache/`, `build/` and `dist/` (PyInstaller outputs), `logs/` (runtime log file location).
 
-## What to tell a user asking “how do I set this up?”
+## What to tell a user asking "how do I set this up?"
 1. Install Python 3.11 and clone the repo.
 2. Create/activate `.venv` and `pip install -r requirements.txt`.
 3. Run `start.bat` (or `python -m path_app`) in the repo root; edit `config.json` if needed.
