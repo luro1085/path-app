@@ -91,8 +91,8 @@ def build_train_row_colors(msg: TrainMessage, row_text: str) -> list[Any]:
     )
     time_start = len(row_text) - len(time_text)
 
-    if time_text == "DUE":
-        for idx in range(time_start, min(time_start + 3, GRID_COLS)):
+    if time_text in ("DUE", "DELAY"):
+        for idx in range(time_start, min(time_start + len(time_text), GRID_COLS)):
             colors[idx] = {"fg": "#FFFFFF", "bg": route_color}
         return colors
 

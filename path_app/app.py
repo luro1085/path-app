@@ -16,12 +16,11 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from PyQt6.QtWebEngineWidgets import QWebEngineView  # type: ignore[import-untyped]
 from PyQt6.QtWebEngineCore import QWebEngineSettings  # type: ignore[import-untyped]
 
-from .board_format import build_board_rows, has_delayed_visible_trains
+from .board_format import build_board_rows
 from .config import AppConfig, load_config
 from .path_data import (
     STATION_DISPLAY_NAMES,
     StationData,
-    is_presumed_service_active,
     parse_station_data_with_presumed,
 )
 
@@ -30,7 +29,82 @@ FEED_URL = "https://www.panynj.gov/bin/portauthority/ridepath.json"
 ICON_PATH = Path("app-icon.ico") if Path("app-icon.ico").exists() else Path("app-icon.png")
 
 # Optional hardcoded test payload: set PATH_FAKE_FEED=1 to use this instead of live feed
-FAKE_PAYLOAD_HOB = {
+# Fake payloads for testing. Toggle with PATH_FAKE_FEED=1.
+# Set PATH_FAKE_SCENARIO to switch between scenarios:
+#   "future_weekend_day"  — post-May 2026 Saturday afternoon (HOB-WTC restored, direct JSQ)
+#   "current_night"       — current late-night via-Hoboken service
+#   (default)             — same as "current_night"
+
+_FAKE_FUTURE_WEEKEND_DAY_HOB = {
+    "consideredStation": "HOB",
+    "destinations": [
+        {
+            "label": "ToNY",
+            "messages": [
+                {
+                    "target": "WTC",
+                    "secondsToArrival": "480",
+                    "arrivalTimeMessage": "8 min",
+                    "lineColor": "65C100",
+                    "headSign": "World Trade Center",
+                    "lastUpdated": "2026-05-16T14:00:00-04:00",
+                },
+                {
+                    "target": "WTC",
+                    "secondsToArrival": "1680",
+                    "arrivalTimeMessage": "28 min",
+                    "lineColor": "65C100",
+                    "headSign": "World Trade Center",
+                    "lastUpdated": "2026-05-16T14:00:00-04:00",
+                },
+                {
+                    "target": "33S",
+                    "secondsToArrival": "300",
+                    "arrivalTimeMessage": "5 min",
+                    "lineColor": "4D92FB",
+                    "headSign": "33rd Street",
+                    "lastUpdated": "2026-05-16T14:00:00-04:00",
+                },
+                {
+                    "target": "33S",
+                    "secondsToArrival": "900",
+                    "arrivalTimeMessage": "15 min",
+                    "lineColor": "4D92FB",
+                    "headSign": "33rd Street",
+                    "lastUpdated": "2026-05-16T14:00:00-04:00",
+                },
+            ],
+        },
+    ],
+}
+_FAKE_FUTURE_WEEKEND_DAY_CHR = {
+    "consideredStation": "CHR",
+    "destinations": [
+        {
+            "label": "ToNJ",
+            "messages": [
+                {
+                    "target": "JSQ",
+                    "secondsToArrival": "300",
+                    "arrivalTimeMessage": "5 min",
+                    "lineColor": "4D92FB",
+                    "headSign": "Journal Square",
+                    "lastUpdated": "2026-05-16T14:00:00-04:00",
+                },
+                {
+                    "target": "JSQ",
+                    "secondsToArrival": "900",
+                    "arrivalTimeMessage": "15 min",
+                    "lineColor": "4D92FB",
+                    "headSign": "Journal Square",
+                    "lastUpdated": "2026-05-16T14:00:00-04:00",
+                },
+            ],
+        }
+    ],
+}
+
+_FAKE_CURRENT_NIGHT_HOB = {
     "consideredStation": "HOB",
     "destinations": [
         {
@@ -59,7 +133,7 @@ FAKE_PAYLOAD_HOB = {
                     "lineColor": "4D92FB,FF9900",
                     "headSign": "Journal Square via Hoboken",
                     "lastUpdated": "2025-10-08T01:45:06.270303-04:00",
-                }
+                },
             ],
         },
         {
@@ -88,12 +162,12 @@ FAKE_PAYLOAD_HOB = {
                     "lineColor": "4D92FB,FF9900",
                     "headSign": "33rd Street via Hoboken",
                     "lastUpdated": "2025-10-08T01:45:06.270303-04:00",
-                }
+                },
             ],
         },
     ],
 }
-FAKE_PAYLOAD_CHR = {
+_FAKE_CURRENT_NIGHT_CHR = {
     "consideredStation": "CHR",
     "destinations": [
         {
@@ -111,6 +185,12 @@ FAKE_PAYLOAD_CHR = {
         }
     ],
 }
+
+def _get_fake_payloads() -> tuple:
+    scenario = os.getenv("PATH_FAKE_SCENARIO", "current_night")
+    if scenario == "future_weekend_day":
+        return _FAKE_FUTURE_WEEKEND_DAY_HOB, _FAKE_FUTURE_WEEKEND_DAY_CHR
+    return _FAKE_CURRENT_NIGHT_HOB, _FAKE_CURRENT_NIGHT_CHR
 
 
 def setup_logging() -> None:
@@ -171,9 +251,10 @@ class FetchThread(QtCore.QThread):
         self.session = requests.Session()
 
     def _fetch_once(self) -> StationData:
-        include_presumed = self.config.show_presumed_trains and is_presumed_service_active(datetime.now())
+        include_presumed = self.config.show_presumed_trains
         if os.getenv("PATH_FAKE_FEED"):
-            payload = {"results": [FAKE_PAYLOAD_HOB, FAKE_PAYLOAD_CHR]}
+            fake_hob, fake_chr = _get_fake_payloads()
+            payload = {"results": [fake_hob, fake_chr]}
             return parse_station_data_with_presumed(
                 payload,
                 self.config.station,
@@ -327,16 +408,9 @@ class MainWindow(QtWidgets.QMainWindow):
         last_update = data.last_updated if data else None
 
         is_stale = self._compute_staleness()
-        has_delay = (
-            data is not None
-            and bool(data.messages)
-            and has_delayed_visible_trains(data.messages, self.config.max_cards)
-        )
 
         if is_stale:
             status = "STALE"
-        elif has_delay:
-            status = "DELAY"
         else:
             status = "LIVE"
 

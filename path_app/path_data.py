@@ -149,6 +149,19 @@ def _is_journal_square_train(message: TrainMessage) -> bool:
     )
 
 
+def _is_via_hoboken_to_jsq(message: TrainMessage) -> bool:
+    """Return True if the train is NJ-bound on the via-Hoboken line toward JSQ.
+
+    Must be both:
+    - on the via-Hoboken route (headsign contains "via Hoboken")
+    - heading toward Journal Square (NJ-bound)
+
+    This excludes NY-bound "33rd Street via Hoboken" trains at Christopher St
+    that have already passed through Hoboken and are heading away from it.
+    """
+    return "via hoboken" in message.headsign.lower() and _is_journal_square_train(message)
+
+
 def _get_close_train_threshold_seconds(now: Optional[datetime] = None) -> int:
     local_now = (now or datetime.now().astimezone())
     if local_now.weekday() >= 5:
@@ -180,7 +193,7 @@ def _build_hoboken_presumed_trains(
     presumed_messages: List[TrainMessage] = []
     source_messages = _parse_station_messages(source_entry, min_seconds_to_show=0)
     for source in source_messages:
-        if not _is_journal_square_train(source):
+        if not _is_via_hoboken_to_jsq(source):
             continue
         seconds_to_arrival = source.seconds_to_arrival + HOBOKEN_FROM_CHRISTOPHER_SECONDS
         if seconds_to_arrival < MIN_SECONDS_TO_SHOW:
@@ -226,15 +239,16 @@ def build_presumed_tooltip(message: TrainMessage, station_code: str) -> str:
     )
 
 
+# DEPRECATED: Time-based gating replaced by headsign-based filtering in
+# _is_via_hoboken_train().  The API headsign ("via Hoboken") is the source of
+# truth for whether a train routes through Hoboken, making this function
+# unnecessary and schedule-change-proof.
 def is_presumed_service_active(dt: datetime) -> bool:
     """Return True when the JSQ-via-Hoboken service runs through Christopher Street.
 
-    Weekends (Sat/Sun): all day.
-    Weekdays (Mon-Fri): late-night only, 11 PM – 6 AM Eastern (local clock).
-    Source: PANYNJ weekday schedule — the JSQ–33 St via Hoboken line runs
-    only from ~10:42 PM JSQ (11:07 PM Chris St) through ~5:39 AM JSQ (5:50 AM Chris St).
-
-    Set PATH_FAKE_SCHEDULE=weekend to force-enable for testing.
+    .. deprecated::
+        No longer used as a gate.  Headsign filtering in
+        ``_build_hoboken_presumed_trains`` handles this automatically.
     """
     import os
     if os.getenv("PATH_FAKE_SCHEDULE") == "weekend":
@@ -277,7 +291,6 @@ __all__ = [
     "BackfillSource",
     "TrainMessage",
     "StationData",
-    "is_presumed_service_active",
     "build_presumed_tooltip",
     "parse_station_data",
     "parse_station_data_with_presumed",

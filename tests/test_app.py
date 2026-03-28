@@ -123,6 +123,19 @@ def test_build_train_row_colors_inverts_only_eta_digits() -> None:
     assert colors[time_start + 4] == "#FFFFFF"
 
 
+def test_build_train_row_colors_inverts_delay_text() -> None:
+    message = _make_message("World Trade Center", "Delayed")
+    row = format_train_row(message)
+    colors = build_train_row_colors(message, row)
+    time_start = len(row) - len("DELAY")
+
+    assert len(colors) == GRID_COLS
+    for idx in range(time_start, time_start + len("DELAY")):
+        assert colors[idx] == {"fg": "#FFFFFF", "bg": "#FFFFFF"}
+    # Destination tiles should remain plain route color
+    assert colors[0] == "#FFFFFF"
+
+
 def test_has_delayed_visible_trains_detects_delayed() -> None:
     delayed = _make_message("World Trade Center", "Delayed")
     normal = _make_message("Journal Square", "5 min")

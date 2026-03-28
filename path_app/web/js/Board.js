@@ -194,7 +194,7 @@ export class Board {
       const oldColor = this.currentColors[rowIndex][c];
 
       if (newChar !== oldChar || !this.colorSpecEquals(rowColor, oldColor)) {
-        this.tiles[rowIndex][c].setChar(newChar, rowColor);
+        this.tiles[rowIndex][c].scrambleTo(newChar, 0, rowColor);
         this.currentGrid[rowIndex][c] = newChar;
         this.currentColors[rowIndex][c] = rowColor;
       }

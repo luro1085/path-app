@@ -1,4 +1,7 @@
-import { CHARSET, SCRAMBLE_COLORS, FLIP_DURATION } from './constants.js';
+import { FLIP_DURATION } from './constants.js';
+
+const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const DIGITS = '0123456789';
 
 export class Tile {
   constructor(row, col) {
@@ -63,37 +66,56 @@ export class Tile {
     }
     this.isAnimating = true;
 
+    // Determine which character pool to cycle through based on the target
+    let pool;
+    if (LETTERS.includes(targetChar)) {
+      pool = LETTERS;
+    } else if (DIGITS.includes(targetChar)) {
+      pool = DIGITS;
+    } else {
+      pool = null; // spaces/punctuation — no cycling
+    }
+
+    // Apply the target color during the entire animation
+    const { fg: settleFg, bg: settleBg } = this.normalizeColorSpec(settleColor);
+
     setTimeout(() => {
+      // If no pool (space/punctuation), just set immediately with a flip
+      if (!pool) {
+        this.frontSpan.textContent = targetChar === ' ' ? '' : targetChar;
+        this.applyColorSpec(settleColor);
+        this.innerEl.style.transition = `transform ${FLIP_DURATION}ms ease-in-out`;
+        this.innerEl.style.transform = 'perspective(400px) rotateX(-8deg)';
+        setTimeout(() => {
+          this.innerEl.style.transform = '';
+          setTimeout(() => {
+            this.innerEl.style.transition = '';
+            this.currentChar = targetChar;
+            this.isAnimating = false;
+          }, FLIP_DURATION);
+        }, FLIP_DURATION / 2);
+        return;
+      }
+
       this.el.classList.add('scrambling');
       let scrambleCount = 0;
       const maxScrambles = 10 + Math.floor(Math.random() * 4);
       const scrambleInterval = 70;
 
+      // Apply target color immediately
+      this.frontEl.style.backgroundColor = settleBg || '';
+      this.frontSpan.style.color = settleFg;
+
       this._scrambleTimer = setInterval(() => {
-        // Random character
-        const randChar = CHARSET[Math.floor(Math.random() * CHARSET.length)];
-        this.frontSpan.textContent = randChar === ' ' ? '' : randChar;
-
-        // Cycle background color
-        const color = SCRAMBLE_COLORS[scrambleCount % SCRAMBLE_COLORS.length];
-        this.frontEl.style.backgroundColor = color;
-
-        // Briefly change text color for contrast on light backgrounds
-        if (color === '#FFFFFF' || color === '#FFCC00') {
-          this.frontSpan.style.color = '#111';
-        } else {
-          this.frontSpan.style.color = '';
-        }
+        // Cycle through matching character type only
+        const randChar = pool[Math.floor(Math.random() * pool.length)];
+        this.frontSpan.textContent = randChar;
 
         scrambleCount++;
 
         if (scrambleCount >= maxScrambles) {
           clearInterval(this._scrambleTimer);
           this._scrambleTimer = null;
-
-          // Reset temporary scramble colors before applying the final style.
-          this.frontEl.style.backgroundColor = '';
-          this.frontSpan.style.color = '#FFFFFF';
 
           // Set the final character
           this.frontSpan.textContent = targetChar === ' ' ? '' : targetChar;

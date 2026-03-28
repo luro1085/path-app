@@ -61,7 +61,7 @@ function buildHeaderText() {
 
 function updateClockRow() {
   if (!board) return;
-  board.updateRow(0, buildHeaderText(), '#FFFFFF');
+  board.updateRow(0, buildHeaderText(), { fg: '#111111', bg: '#FCCC0A' });
 }
 
 function buildStatusRow(status, lastUpdated) {
@@ -99,7 +99,7 @@ window.updateBoard = function(data) {
 
   for (let i = 0; i < 7; i++) {
     if (i === 0) {
-      rowData.push({ text: buildHeaderText(), colors: '#FFFFFF' });
+      rowData.push({ text: buildHeaderText(), colors: { fg: '#111111', bg: '#FCCC0A' } });
     } else if (i === 6) {
       rowData.push({
         text: board.currentGrid[6].join(''),
@@ -127,12 +127,15 @@ window.setStatus = function(status, lastUpdated) {
 
   const { rowText, colors } = buildStatusRow(status, lastUpdated);
 
-  board.updateRow(6, rowText, '#9FB3C8');
   const padded = (rowText.toUpperCase() + ' '.repeat(GRID_COLS)).substring(0, GRID_COLS);
   for (let c = 0; c < GRID_COLS; c++) {
     const ch = padded[c];
     const color = colors[c];
-    board.tiles[6][c].setChar(ch, color);
+    const oldChar = board.currentGrid[6][c];
+    const oldColor = board.currentColors[6][c];
+    if (ch !== oldChar || !board.colorSpecEquals(color, oldColor)) {
+      board.tiles[6][c].scrambleTo(ch, 0, color);
+    }
     board.currentGrid[6][c] = ch;
     board.currentColors[6][c] = color;
   }
