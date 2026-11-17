@@ -14,7 +14,7 @@ Purpose: give an automated assistant a concise map of the codebase so it can tel
 
 ## Directory and file map
 - `path_app/` Python package for the kiosk UI and data handling.
-  - `app.py` Main PyQt6 window: polls the Citymapper `metrodepartures` API, handles backoff/jitter, renders arrival cards and status UI, writes rotating log to `logs/app.log`, supports `PATH_FAKE_FEED=1` for an embedded sample payload, and wires `config.json` into fonts/polling thresholds.
+  - `app.py` Main PyQt6 window: polls `ridepath.json` with a Citymapper `metrodepartures` fallback, handles backoff/jitter, renders arrival cards and status UI, writes rotating log to `logs/app.log`, supports `PATH_FAKE_FEED=1` for an embedded sample payload, and wires `config.json` into fonts/polling thresholds.
   - `config.py` Default config values and `load_config`, which writes `config.json` if absent and merges any overrides.
   - `path_data.py` Dataclasses and parsing helpers that normalize feed colors, arrival times, and timestamps; used by the UI and tests.
   - `__main__.py` Entry point for `python -m path_app`.

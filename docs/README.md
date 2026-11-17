@@ -1,6 +1,6 @@
 # PATH Arrivals Kiosk (Hoboken)
 
-Windows-first PyQt6 display for live PATH departures from Citymapper. Sized exactly for a 1920×720 stretched panel with big, clean text and minimal chrome.
+Windows-first PyQt6 display for live PATH departures from `ridepath.json` (with a Citymapper backup). Sized exactly for a 1920×720 stretched panel with big, clean text and minimal chrome.
 
 ## Setup (Windows 11)
 - Install Python 3.11 (add to PATH).
@@ -33,8 +33,8 @@ Windows-first PyQt6 display for live PATH departures from Citymapper. Sized exac
 - `font_family`: preferred fonts, comma-separated.
 
 ## Behavior
-- Polls `https://citymapper.com/api/2/metrodepartures?headways=1&ids=PATHHoboken,PATHChristopherSt&region_id=us-nyc` with a 5s timeout (one request covers the configured station plus Christopher St for presumed trains).
-- Picks the station whose `live_code` matches the configured station; uses each departure's live `time_seconds` countdown when present, else its `scheduled_time`; sorts by soonest.
+- Polls `https://www.panynj.gov/bin/portauthority/ridepath.json` (5s timeout) and uses the entry where `consideredStation` matches the configured station, sorted by soonest `secondsToArrival`.
+- Backup feed: if ridepath.json errors or lists no trains for the station, falls back to Citymapper (`https://citymapper.com/api/2/metrodepartures?headways=1&ids=PATHHoboken,PATHChristopherSt&region_id=us-nyc`), using each departure's live `time_seconds` when present, else its `scheduled_time`. Switches are logged; ridepath is retried on every poll. Set `PATH_FORCE_CITYMAPPER=1` to test the backup.
 - Multi-color `lineColor` renders a split 50/50 bar.
 - Right sidebar shows local clock, freshest `lastUpdated`, and a LIVE/STALE pill (stale if data is older than threshold, fetch failed, or messages are empty). On network failure it keeps last data but flips to STALE and retries with 5/10/20/.../60s backoff.
 - Placeholder text appears when no messages are posted.

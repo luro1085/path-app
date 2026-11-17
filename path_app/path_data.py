@@ -2,14 +2,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterator, List, Optional
+import re
+from typing import Any, Callable, Dict, Iterator, List, Optional
 
 
-# Shown times are pulled this much earlier than the feed's departure time.
-ARRIVAL_LEAD_SECONDS = 60
+# --- Primary feed: PATH's ridepath.json -------------------------------------
+# The ridepath countdown runs ~2 min long, so shown times are pulled earlier.
+ARRIVAL_LEAD_SECONDS = 120
+MIN_SECONDS_TO_SHOW = 90
+
+# --- Backup feed: Citymapper metrodepartures --------------------------------
+# Citymapper's times line up with scheduled departures, so a smaller lead.
+CITYMAPPER_ARRIVAL_LEAD_SECONDS = 60
 # Trains whose raw (pre-lead) time is under this are dropped (keeps a train on
 # the board as DUE until ~30s before its displayed time would go negative).
-MIN_SECONDS_TO_SHOW = 30
+CITYMAPPER_MIN_SECONDS_TO_SHOW = 30
+
 HOBOKEN_STATION_CODE = "HOB"
 CHRISTOPHER_STREET_CODE = "CHR"
 JOURNAL_SQUARE_CODE = "JSQ"
@@ -24,7 +32,7 @@ CITYMAPPER_STATION_IDS: Dict[str, str] = {
     "CHR": "PATHChristopherSt",
     "JSQ": "PATHJournalSquare",
 }
-# Citymapper destination name -> legacy PATH target code.
+# Citymapper destination name -> PATH target code.
 DESTINATION_CODES: Dict[str, str] = {
     "World Trade Center": "WTC",
     "33rd Street": "33S",
@@ -41,7 +49,7 @@ NY_BOUND_DESTINATIONS = {
     "Christopher Street",
 }
 # JSQ-33 via Hoboken is a blended route: blue toward NY, orange toward NJ
-# (matching the old PATH feed's "4D92FB,FF9900" lineColor).
+# (matching ridepath's "4D92FB,FF9900" lineColor).
 VIA_HOBOKEN_LINE_COLORS = ["#4D92FB", "#FF9900"]
 
 
@@ -106,11 +114,94 @@ def station_display_name(station_code: str) -> str:
     return STATION_DISPLAY_NAMES.get(station_code, station_code)
 
 
+def _format_relative_minutes(seconds_to_arrival: int) -> str:
+    minutes = max(0, seconds_to_arrival // 60)
+    return f"{minutes} min"
+
+
+def _latest_update(messages: List[TrainMessage]) -> Optional[datetime]:
+    return max((msg.last_updated for msg in messages if msg.last_updated), default=None)
+
+
+# ---------------------------------------------------------------------------
+# ridepath.json parsing (primary)
+# ---------------------------------------------------------------------------
+
+def _format_arrival_message(arrival_message: str, seconds_to_arrival: int) -> str:
+    if not arrival_message:
+        return ""
+    if re.fullmatch(r"\s*(\d+)\s*min\s*", arrival_message, flags=re.IGNORECASE):
+        minutes = max(0, seconds_to_arrival // 60)
+        return f"{minutes} min"
+    return arrival_message
+
+
+def _find_station_entry(payload: Any, station_code: str) -> Optional[dict]:
+    results = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(results, list):
+        return None
+    return next(
+        (entry for entry in results if entry.get("consideredStation") == station_code),
+        None,
+    )
+
+
+def _parse_station_messages(
+    station_entry: dict, *, min_seconds_to_show: int = MIN_SECONDS_TO_SHOW
+) -> List[TrainMessage]:
+    messages: List[TrainMessage] = []
+    for destination in station_entry.get("destinations", []):
+        label = destination.get("label", "")
+        for raw_msg in destination.get("messages", []):
+            try:
+                raw_seconds = int(raw_msg.get("secondsToArrival", "0"))
+            except (TypeError, ValueError):
+                continue
+            if raw_seconds < min_seconds_to_show:
+                continue
+            seconds = max(0, raw_seconds - ARRIVAL_LEAD_SECONDS)
+            arrival_message = str(raw_msg.get("arrivalTimeMessage", "")).strip()
+            arrival_message = _format_arrival_message(arrival_message, seconds)
+            message = TrainMessage(
+                label=label,
+                target=str(raw_msg.get("target", "")).strip(),
+                seconds_to_arrival=seconds,
+                arrival_message=arrival_message,
+                line_colors=parse_line_colors(str(raw_msg.get("lineColor", ""))),
+                headsign=str(raw_msg.get("headSign", "")).strip(),
+                last_updated=parse_last_updated(raw_msg.get("lastUpdated")),
+            )
+            messages.append(message)
+
+    messages.sort(key=lambda m: m.seconds_to_arrival)
+    return messages
+
+
+def ridepath_has_departures(payload: Any, station_code: str) -> bool:
+    """True if ridepath.json lists at least one train for the station.
+
+    Used to decide whether to fall back to Citymapper: an outage has looked
+    like an empty/missing station entry rather than an HTTP error.
+    """
+    station_entry = _find_station_entry(payload, station_code)
+    if not station_entry:
+        return False
+    return any(
+        destination.get("messages")
+        for destination in station_entry.get("destinations", [])
+        if isinstance(destination, dict)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Citymapper metrodepartures parsing (backup)
+# ---------------------------------------------------------------------------
+
 def citymapper_station_id(station_code: str) -> str:
     return CITYMAPPER_STATION_IDS.get(station_code, station_code)
 
 
-def _find_station_entry(payload: Any, station_code: str) -> Optional[dict]:
+def _find_citymapper_station_entry(payload: Any, station_code: str) -> Optional[dict]:
     stations = payload.get("stations") if isinstance(payload, dict) else None
     if not isinstance(stations, list):
         return None
@@ -124,11 +215,6 @@ def _find_station_entry(payload: Any, station_code: str) -> Optional[dict]:
         ),
         None,
     )
-
-
-def _format_relative_minutes(seconds_to_arrival: int) -> str:
-    minutes = max(0, seconds_to_arrival // 60)
-    return f"{minutes} min"
 
 
 def _is_via_hoboken_route(route: dict) -> bool:
@@ -165,12 +251,12 @@ def _departure_time(departure: dict, reference: datetime) -> Optional[datetime]:
     return parse_last_updated(departure.get("scheduled_time"))
 
 
-def _parse_station_messages(
+def _parse_citymapper_station_messages(
     station_entry: dict,
     *,
     now: datetime,
     last_updated: Optional[datetime],
-    min_seconds_to_show: int = MIN_SECONDS_TO_SHOW,
+    min_seconds_to_show: int = CITYMAPPER_MIN_SECONDS_TO_SHOW,
 ) -> List[TrainMessage]:
     routes = {
         route.get("live_line_code"): route
@@ -187,7 +273,7 @@ def _parse_station_messages(
         raw_seconds = int((departure_time - now).total_seconds())
         if raw_seconds < min_seconds_to_show:
             continue
-        seconds = max(0, raw_seconds - ARRIVAL_LEAD_SECONDS)
+        seconds = max(0, raw_seconds - CITYMAPPER_ARRIVAL_LEAD_SECONDS)
 
         destination = str(departure.get("destination_name", "")).strip()
         route = routes.get(departure.get("route_id"), {})
@@ -211,9 +297,23 @@ def _parse_station_messages(
     return messages
 
 
-def _latest_update(messages: List[TrainMessage]) -> Optional[datetime]:
-    return max((msg.last_updated for msg in messages if msg.last_updated), default=None)
+def _citymapper_last_updated(payload: Any) -> Optional[datetime]:
+    if not isinstance(payload, dict):
+        return None
+    return parse_last_updated(payload.get("last_updated_time"))
 
+
+def _resolve_now(now: Optional[datetime]) -> datetime:
+    if now is None:
+        return datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        return now.replace(tzinfo=timezone.utc)
+    return now
+
+
+# ---------------------------------------------------------------------------
+# Presumed Hoboken trains (shared by both feeds)
+# ---------------------------------------------------------------------------
 
 def _is_journal_square_train(message: TrainMessage) -> bool:
     target = message.target.strip().upper()
@@ -259,20 +359,10 @@ def _has_close_match(
     return False
 
 
-def _build_hoboken_presumed_trains(
-    payload: Any, existing_messages: List[TrainMessage], *, now: datetime
+def _presumed_from_christopher(
+    source_messages: List[TrainMessage], existing_messages: List[TrainMessage]
 ) -> List[TrainMessage]:
-    source_entry = _find_station_entry(payload, CHRISTOPHER_STREET_CODE)
-    if not source_entry:
-        return []
-
     presumed_messages: List[TrainMessage] = []
-    source_messages = _parse_station_messages(
-        source_entry,
-        now=now,
-        last_updated=_payload_last_updated(payload),
-        min_seconds_to_show=0,
-    )
     for source in source_messages:
         if not _is_via_hoboken_to_jsq(source):
             continue
@@ -301,6 +391,49 @@ def _build_hoboken_presumed_trains(
         )
 
     return presumed_messages
+
+
+def _build_hoboken_presumed_trains(
+    payload: Any, existing_messages: List[TrainMessage]
+) -> List[TrainMessage]:
+    source_entry = _find_station_entry(payload, CHRISTOPHER_STREET_CODE)
+    if not source_entry:
+        return []
+    source_messages = _parse_station_messages(source_entry, min_seconds_to_show=0)
+    return _presumed_from_christopher(source_messages, existing_messages)
+
+
+def _build_citymapper_hoboken_presumed_trains(
+    payload: Any, existing_messages: List[TrainMessage], *, now: datetime
+) -> List[TrainMessage]:
+    source_entry = _find_citymapper_station_entry(payload, CHRISTOPHER_STREET_CODE)
+    if not source_entry:
+        return []
+    source_messages = _parse_citymapper_station_messages(
+        source_entry,
+        now=now,
+        last_updated=_citymapper_last_updated(payload),
+        min_seconds_to_show=0,
+    )
+    return _presumed_from_christopher(source_messages, existing_messages)
+
+
+def _merge_presumed(
+    base_data: StationData,
+    station_code: str,
+    include_presumed: bool,
+    build: Callable[[List[TrainMessage]], List[TrainMessage]],
+) -> StationData:
+    if not include_presumed or station_code != HOBOKEN_STATION_CODE:
+        return base_data
+
+    presumed_messages = build(base_data.messages)
+    if not presumed_messages:
+        return base_data
+
+    merged = list(base_data.messages) + presumed_messages
+    merged.sort(key=lambda m: m.seconds_to_arrival)
+    return StationData(messages=merged, last_updated=_latest_update(merged))
 
 
 def build_presumed_tooltip(message: TrainMessage, station_code: str) -> str:
@@ -339,56 +472,67 @@ def is_presumed_service_active(dt: datetime) -> bool:
     return dt.hour >= 23 or dt.hour < 6
 
 
-def _payload_last_updated(payload: Any) -> Optional[datetime]:
-    if not isinstance(payload, dict):
-        return None
-    return parse_last_updated(payload.get("last_updated_time"))
+# ---------------------------------------------------------------------------
+# Public parse functions
+# ---------------------------------------------------------------------------
 
-
-def _resolve_now(now: Optional[datetime]) -> datetime:
-    if now is None:
-        return datetime.now(timezone.utc)
-    if now.tzinfo is None:
-        return now.replace(tzinfo=timezone.utc)
-    return now
-
-
-def parse_station_data(
-    payload: Any, station_code: str, *, now: Optional[datetime] = None
-) -> StationData:
+def parse_station_data(payload: Any, station_code: str) -> StationData:
+    """Parse a ridepath.json payload."""
     station_entry = _find_station_entry(payload, station_code)
     if not station_entry:
         return StationData(messages=[], last_updated=None)
 
-    messages = _parse_station_messages(
-        station_entry,
-        now=_resolve_now(now),
-        last_updated=_payload_last_updated(payload),
-    )
+    messages = _parse_station_messages(station_entry)
     return StationData(messages=messages, last_updated=_latest_update(messages))
 
 
 def parse_station_data_with_presumed(
+    payload: Any, station_code: str, *, include_presumed: bool = True
+) -> StationData:
+    """Parse a ridepath.json payload, adding presumed Hoboken trains."""
+    base_data = parse_station_data(payload, station_code)
+    return _merge_presumed(
+        base_data,
+        station_code,
+        include_presumed,
+        lambda existing: _build_hoboken_presumed_trains(payload, existing),
+    )
+
+
+def parse_citymapper_station_data(
+    payload: Any, station_code: str, *, now: Optional[datetime] = None
+) -> StationData:
+    """Parse a Citymapper metrodepartures payload."""
+    station_entry = _find_citymapper_station_entry(payload, station_code)
+    if not station_entry:
+        return StationData(messages=[], last_updated=None)
+
+    messages = _parse_citymapper_station_messages(
+        station_entry,
+        now=_resolve_now(now),
+        last_updated=_citymapper_last_updated(payload),
+    )
+    return StationData(messages=messages, last_updated=_latest_update(messages))
+
+
+def parse_citymapper_station_data_with_presumed(
     payload: Any,
     station_code: str,
     *,
     include_presumed: bool = True,
     now: Optional[datetime] = None,
 ) -> StationData:
+    """Parse a Citymapper metrodepartures payload, adding presumed Hoboken trains."""
     now = _resolve_now(now)
-    base_data = parse_station_data(payload, station_code, now=now)
-    if not include_presumed or station_code != HOBOKEN_STATION_CODE:
-        return base_data
-
-    presumed_messages = _build_hoboken_presumed_trains(
-        payload, base_data.messages, now=now
+    base_data = parse_citymapper_station_data(payload, station_code, now=now)
+    return _merge_presumed(
+        base_data,
+        station_code,
+        include_presumed,
+        lambda existing: _build_citymapper_hoboken_presumed_trains(
+            payload, existing, now=now
+        ),
     )
-    if not presumed_messages:
-        return base_data
-
-    merged = list(base_data.messages) + presumed_messages
-    merged.sort(key=lambda m: m.seconds_to_arrival)
-    return StationData(messages=merged, last_updated=_latest_update(merged))
 
 
 def top_messages(messages: List[TrainMessage], limit: int) -> List[TrainMessage]:
@@ -401,10 +545,13 @@ __all__ = [
     "StationData",
     "build_presumed_tooltip",
     "citymapper_station_id",
+    "parse_citymapper_station_data",
+    "parse_citymapper_station_data_with_presumed",
     "parse_station_data",
     "parse_station_data_with_presumed",
     "parse_line_colors",
     "parse_last_updated",
+    "ridepath_has_departures",
     "station_display_name",
     "top_messages",
 ]

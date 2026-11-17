@@ -4,7 +4,7 @@ import json
 import logging
 import sys
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
@@ -32,14 +32,18 @@ from .path_data import (
     STATION_DISPLAY_NAMES,
     StationData,
     citymapper_station_id,
+    parse_citymapper_station_data_with_presumed,
     parse_station_data_with_presumed,
+    ridepath_has_departures,
 )
 
 LOG_PATH = Path("logs/app.log")
-FEED_URL = "https://citymapper.com/api/2/metrodepartures"
-FEED_REGION_ID = "us-nyc"
+FEED_URL = "https://www.panynj.gov/bin/portauthority/ridepath.json"
+# Backup feed, used when ridepath.json errors or lists no trains for the station.
+CITYMAPPER_URL = "https://citymapper.com/api/2/metrodepartures"
+CITYMAPPER_REGION_ID = "us-nyc"
 # Citymapper rejects the default python-requests User-Agent with a 403.
-FEED_HEADERS = {
+CITYMAPPER_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/130.0 Safari/537.36"
@@ -50,102 +54,170 @@ FEED_HEADERS = {
 PAGE_RELOAD_INTERVAL_MS = 4 * 60 * 60 * 1000  # 4 hours
 ICON_PATH = Path("app-icon.ico") if Path("app-icon.ico").exists() else Path("app-icon.png")
 
+# Optional hardcoded test payload: set PATH_FAKE_FEED=1 to use this instead of live feed
 # Fake payloads for testing. Toggle with PATH_FAKE_FEED=1.
 # Set PATH_FAKE_SCENARIO to switch between scenarios:
-#   "future_weekend_day"  — post-May 2026 Saturday afternoon (HOB-WTC restored, direct JSQ)
-#   "current_night"       — current late-night via-Hoboken service
-#   (default)             — same as "current_night"
-# Departures are (seconds_from_now, destination_name, route_id) and are turned
-# into a Citymapper-shaped payload relative to the current time.
+#   "future_weekend_day"  â€” post-May 2026 Saturday afternoon (HOB-WTC restored, direct JSQ)
+#   "current_night"       â€” current late-night via-Hoboken service
+#   (default)             â€” same as "current_night"
+# Set PATH_FORCE_CITYMAPPER=1 to skip ridepath.json and use the backup feed.
 
-_FAKE_ROUTES = {
-    "PATHHob33": ("HOB-33", "#4d92fb", "Hoboken-33rd Street"),
-    "PATHHobwtc": ("HOB-WTC", "#65c100", "Hoboken-World Trade Center"),
-    "PATHJsq33": ("JSQ-33", "#ff9900", "Journal Square-33rd Street"),
-    "PATHJsqhob33": (
-        "JSQ-HOB-33",
-        "#ff9900",
-        "Journal Square-33rd Street (Via Hoboken)",
-    ),
+_FAKE_FUTURE_WEEKEND_DAY_HOB = {
+    "consideredStation": "HOB",
+    "destinations": [
+        {
+            "label": "ToNY",
+            "messages": [
+                {
+                    "target": "WTC",
+                    "secondsToArrival": "480",
+                    "arrivalTimeMessage": "8 min",
+                    "lineColor": "65C100",
+                    "headSign": "World Trade Center",
+                    "lastUpdated": "2026-05-16T14:00:00-04:00",
+                },
+                {
+                    "target": "WTC",
+                    "secondsToArrival": "1680",
+                    "arrivalTimeMessage": "28 min",
+                    "lineColor": "65C100",
+                    "headSign": "World Trade Center",
+                    "lastUpdated": "2026-05-16T14:00:00-04:00",
+                },
+                {
+                    "target": "33S",
+                    "secondsToArrival": "300",
+                    "arrivalTimeMessage": "5 min",
+                    "lineColor": "4D92FB",
+                    "headSign": "33rd Street",
+                    "lastUpdated": "2026-05-16T14:00:00-04:00",
+                },
+                {
+                    "target": "33S",
+                    "secondsToArrival": "900",
+                    "arrivalTimeMessage": "15 min",
+                    "lineColor": "4D92FB",
+                    "headSign": "33rd Street",
+                    "lastUpdated": "2026-05-16T14:00:00-04:00",
+                },
+            ],
+        },
+    ],
+}
+_FAKE_FUTURE_WEEKEND_DAY_CHR = {
+    "consideredStation": "CHR",
+    "destinations": [
+        {
+            "label": "ToNJ",
+            "messages": [
+                {
+                    "target": "JSQ",
+                    "secondsToArrival": "300",
+                    "arrivalTimeMessage": "5 min",
+                    "lineColor": "4D92FB",
+                    "headSign": "Journal Square",
+                    "lastUpdated": "2026-05-16T14:00:00-04:00",
+                },
+                {
+                    "target": "JSQ",
+                    "secondsToArrival": "900",
+                    "arrivalTimeMessage": "15 min",
+                    "lineColor": "4D92FB",
+                    "headSign": "Journal Square",
+                    "lastUpdated": "2026-05-16T14:00:00-04:00",
+                },
+            ],
+        }
+    ],
 }
 
-_FAKE_SCENARIOS = {
-    "future_weekend_day": {
-        "PATHHoboken": [
-            (480, "World Trade Center", "PATHHobwtc"),
-            (1680, "World Trade Center", "PATHHobwtc"),
-            (300, "33rd Street", "PATHHob33"),
-            (900, "33rd Street", "PATHHob33"),
-        ],
-        "PATHChristopherSt": [
-            (300, "Journal Square", "PATHJsq33"),
-            (900, "Journal Square", "PATHJsq33"),
-        ],
-    },
-    "current_night": {
-        "PATHHoboken": [
-            (34, "Journal Square", "PATHJsqhob33"),
-            (2260, "Journal Square", "PATHJsqhob33"),
-            (3000, "Journal Square", "PATHJsqhob33"),
-            (39, "33rd Street", "PATHJsqhob33"),
-            (2139, "33rd Street", "PATHJsqhob33"),
-            (3000, "33rd Street", "PATHJsqhob33"),
-        ],
-        "PATHChristopherSt": [
-            (600, "Journal Square", "PATHJsqhob33"),
-        ],
-    },
+_FAKE_CURRENT_NIGHT_HOB = {
+    "consideredStation": "HOB",
+    "destinations": [
+        {
+            "label": "ToNJ",
+            "messages": [
+                {
+                    "target": "JSQ",
+                    "secondsToArrival": "34",
+                    "arrivalTimeMessage": "Delayed",
+                    "lineColor": "4D92FB,FF9900",
+                    "headSign": "Journal Square via Hoboken",
+                    "lastUpdated": "2025-10-08T01:45:06.270303-04:00",
+                },
+                {
+                    "target": "JSQ",
+                    "secondsToArrival": "2260",
+                    "arrivalTimeMessage": "38 min",
+                    "lineColor": "4D92FB,FF9900",
+                    "headSign": "Journal Square via Hoboken",
+                    "lastUpdated": "2025-10-08T01:45:06.270303-04:00",
+                },
+                {
+                    "target": "JSQ",
+                    "secondsToArrival": "3000",
+                    "arrivalTimeMessage": "50 min",
+                    "lineColor": "4D92FB,FF9900",
+                    "headSign": "Journal Square via Hoboken",
+                    "lastUpdated": "2025-10-08T01:45:06.270303-04:00",
+                },
+            ],
+        },
+        {
+            "label": "ToNY",
+            "messages": [
+                {
+                    "target": "33S",
+                    "secondsToArrival": "39",
+                    "arrivalTimeMessage": "1 min",
+                    "lineColor": "4D92FB,FF9900",
+                    "headSign": "33rd Street via Hoboken",
+                    "lastUpdated": "2025-10-08T01:45:06.270303-04:00",
+                },
+                {
+                    "target": "33S",
+                    "secondsToArrival": "2139",
+                    "arrivalTimeMessage": "36 min",
+                    "lineColor": "4D92FB,FF9900",
+                    "headSign": "33rd Street via Hoboken",
+                    "lastUpdated": "2025-10-08T01:45:06.270303-04:00",
+                },
+                {
+                    "target": "33S",
+                    "secondsToArrival": "3000",
+                    "arrivalTimeMessage": "50 min",
+                    "lineColor": "4D92FB,FF9900",
+                    "headSign": "33rd Street via Hoboken",
+                    "lastUpdated": "2025-10-08T01:45:06.270303-04:00",
+                },
+            ],
+        },
+    ],
+}
+_FAKE_CURRENT_NIGHT_CHR = {
+    "consideredStation": "CHR",
+    "destinations": [
+        {
+            "label": "ToNJ",
+            "messages": [
+                {
+                    "target": "JSQ",
+                    "secondsToArrival": "600",
+                    "arrivalTimeMessage": "10 min",
+                    "lineColor": "4D92FB,FF9900",
+                    "headSign": "Journal Square via Hoboken",
+                    "lastUpdated": "2025-10-08T01:45:06.270303-04:00",
+                }
+            ],
+        }
+    ],
 }
 
-
-def _fake_station_entry(live_code: str, departures: list, now: datetime) -> dict:
-    route_ids = sorted({route_id for _, _, route_id in departures})
-    return {
-        "station": {"name": live_code, "live_code": live_code, "brands": ["PATH"]},
-        "messages": [],
-        "sections": [
-            {
-                "id": live_code,
-                "departure_groupings": [
-                    {
-                        "grouping_id": f"Platform_{live_code}",
-                        "departures": [
-                            {
-                                "destination_name": destination,
-                                "route_id": route_id,
-                                "scheduled_time": (
-                                    now + timedelta(seconds=offset)
-                                ).isoformat(),
-                            }
-                            for offset, destination, route_id in departures
-                        ],
-                    }
-                ],
-            }
-        ],
-        "routes": [
-            {
-                "name": _FAKE_ROUTES[route_id][0],
-                "color": _FAKE_ROUTES[route_id][1],
-                "long_name": _FAKE_ROUTES[route_id][2],
-                "live_line_code": route_id,
-            }
-            for route_id in route_ids
-        ],
-    }
-
-
-def _get_fake_payload() -> dict:
+def _get_fake_payloads() -> tuple:
     scenario = os.getenv("PATH_FAKE_SCENARIO", "current_night")
-    stations = _FAKE_SCENARIOS.get(scenario, _FAKE_SCENARIOS["current_night"])
-    now = datetime.now().astimezone()
-    return {
-        "stations": [
-            _fake_station_entry(live_code, departures, now)
-            for live_code, departures in stations.items()
-        ],
-        "last_updated_time": now.isoformat(),
-    }
+    if scenario == "future_weekend_day":
+        return _FAKE_FUTURE_WEEKEND_DAY_HOB, _FAKE_FUTURE_WEEKEND_DAY_CHR
+    return _FAKE_CURRENT_NIGHT_HOB, _FAKE_CURRENT_NIGHT_CHR
 
 
 def setup_logging() -> None:
@@ -166,10 +238,11 @@ class FetchThread(QtCore.QThread):
     def __init__(self, config: AppConfig) -> None:
         super().__init__()
         self.config = config
-        self.session = self._new_session()
+        self.session = requests.Session()
         self._stop_event = threading.Event()
         self._backoff_seconds = 5
         self._fetch_count = 0
+        self._source: Optional[str] = None
 
     def run(self) -> None:
         delay = 0
@@ -203,40 +276,85 @@ class FetchThread(QtCore.QThread):
             self.session.close()
         except Exception:
             pass
-        self.session = self._new_session()
+        self.session = requests.Session()
 
-    @staticmethod
-    def _new_session() -> requests.Session:
-        session = requests.Session()
-        session.headers.update(FEED_HEADERS)
-        return session
-
-    def _feed_station_ids(self) -> str:
+    def _citymapper_station_ids(self) -> str:
         codes = [self.config.station]
         if self.config.show_presumed_trains and self.config.station == HOBOKEN_STATION_CODE:
             codes.append(CHRISTOPHER_STREET_CODE)
         return ",".join(citymapper_station_id(code) for code in codes)
 
-    def _fetch_once(self) -> StationData:
-        include_presumed = self.config.show_presumed_trains
-        if os.getenv("PATH_FAKE_FEED"):
-            return parse_station_data_with_presumed(
-                _get_fake_payload(),
-                self.config.station,
-                include_presumed=include_presumed,
-            )
+    def _fetch_ridepath(self) -> object:
+        resp = self.session.get(FEED_URL, timeout=5)
+        resp.raise_for_status()
+        return resp.json()
+
+    def _fetch_citymapper(self) -> object:
         resp = self.session.get(
-            FEED_URL,
+            CITYMAPPER_URL,
             params={
                 "headways": 1,
-                "ids": self._feed_station_ids(),
-                "region_id": FEED_REGION_ID,
+                "ids": self._citymapper_station_ids(),
+                "region_id": CITYMAPPER_REGION_ID,
             },
+            headers=CITYMAPPER_HEADERS,
             timeout=5,
         )
         resp.raise_for_status()
-        return parse_station_data_with_presumed(
-            resp.json(),
+        return resp.json()
+
+    def _set_source(self, source: str, reason: Optional[Exception] = None) -> None:
+        """Log only when the feed in use changes, to keep the log quiet."""
+        if source == self._source:
+            return
+        if source == "citymapper":
+            logging.warning("Using Citymapper backup feed (ridepath.json: %s)", reason)
+        else:
+            logging.info("Using ridepath.json feed")
+        self._source = source
+
+    def _fetch_once(self) -> StationData:
+        include_presumed = self.config.show_presumed_trains
+        if os.getenv("PATH_FAKE_FEED"):
+            fake_hob, fake_chr = _get_fake_payloads()
+            payload = {"results": [fake_hob, fake_chr]}
+            return parse_station_data_with_presumed(
+                payload,
+                self.config.station,
+                include_presumed=include_presumed,
+            )
+
+        # Primary: ridepath.json. Fall back to Citymapper if it errors or lists
+        # no trains for the station (how its multi-day outage presented).
+        ridepath_error: Optional[Exception] = None
+        if os.getenv("PATH_FORCE_CITYMAPPER"):
+            ridepath_error = RuntimeError("skipped (PATH_FORCE_CITYMAPPER)")
+        else:
+            try:
+                payload = self._fetch_ridepath()
+                if ridepath_has_departures(payload, self.config.station):
+                    self._set_source("ridepath")
+                    return parse_station_data_with_presumed(
+                        payload,
+                        self.config.station,
+                        include_presumed=include_presumed,
+                    )
+                ridepath_error = RuntimeError(
+                    f"no departures listed for {self.config.station}"
+                )
+            except Exception as exc:  # network, HTTP or JSON errors
+                ridepath_error = exc
+
+        try:
+            payload = self._fetch_citymapper()
+        except Exception as exc:
+            raise RuntimeError(
+                f"ridepath.json failed ({ridepath_error}); "
+                f"Citymapper backup failed ({exc})"
+            ) from exc
+        self._set_source("citymapper", ridepath_error)
+        return parse_citymapper_station_data_with_presumed(
+            payload,
             self.config.station,
             include_presumed=include_presumed,
         )
