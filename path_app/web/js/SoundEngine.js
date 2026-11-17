@@ -69,6 +69,8 @@ export class SoundEngine {
     this._currentSource = source;
 
     source.onended = () => {
+      try { source.disconnect(); } catch (_) {}
+      try { gain.disconnect(); } catch (_) {}
       if (this._currentSource === source) {
         this._currentSource = null;
       }
